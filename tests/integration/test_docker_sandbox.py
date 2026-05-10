@@ -323,3 +323,29 @@ async def test_attach_file_missing_file_fails(sandbox, assistant_id):
     )
     assert result.ok is False
     assert result.error is not None
+
+
+async def test_reset_wipes_workspace_and_recreates_container(sandbox, assistant_id):
+    import docker
+    from email_agent.models.sandbox import ToolCall
+
+    await sandbox.ensure_started(assistant_id)
+    await sandbox.run_tool(
+        assistant_id,
+        "r-1",
+        ToolCall(kind="write", path="notes/persistent.md", content="hi\n"),
+    )
+
+    client = docker.from_env()
+    original_id = client.containers.get(f"email-agent-sandbox-{assistant_id}").id
+
+    await sandbox.reset(assistant_id)
+    await sandbox.ensure_started(assistant_id)
+
+    new_id = client.containers.get(f"email-agent-sandbox-{assistant_id}").id
+    assert new_id != original_id
+
+    read_result = await sandbox.run_tool(
+        assistant_id, "r-1", ToolCall(kind="read", path="notes/persistent.md")
+    )
+    assert read_result.ok is False

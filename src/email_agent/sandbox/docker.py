@@ -1,5 +1,7 @@
 import asyncio
+import contextlib
 import io
+import shutil
 import tarfile
 import time
 from pathlib import Path, PurePosixPath
@@ -162,6 +164,18 @@ class DockerSandbox:
                 return ToolResult(ok=False, error=f"attach_file: {call.path} not found")
             return ToolResult(ok=True)
         raise NotImplementedError(f"run_tool: {call.kind} lands in a later task")
+
+    async def reset(self, assistant_id: str) -> None:
+        await asyncio.to_thread(self._reset_sync, assistant_id)
+
+    def _reset_sync(self, assistant_id: str) -> None:
+        import docker as docker_sdk
+
+        with contextlib.suppress(docker_sdk.errors.NotFound):
+            self._container(assistant_id).remove(force=True)
+        host_workspace = self._workspace_dir(assistant_id)
+        if host_workspace.exists():
+            shutil.rmtree(host_workspace)
 
     async def read_attachment_out(self, assistant_id: str, run_id: str, path: str) -> bytes:
         return await asyncio.to_thread(self._read_attachment_out_sync, assistant_id, path)
