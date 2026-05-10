@@ -167,13 +167,13 @@ async def _inject_email(
         typer.echo("\n--- run steps ---")
         for step in steps:
             typer.echo(
-                f"  [{step.kind:>5}]  in={step.input_summary[:80]!r}  out={step.output_summary[:80]!r}  cost_cents={step.cost_cents}"
+                f"  [{step.kind:>5}]  in={step.input_summary[:80]!r}  out={step.output_summary[:80]!r}  cost=${step.cost_usd}"
             )
 
     if usage:
         u = usage[0]
         typer.echo(
-            f"\n--- usage ---  input={u.input_tokens}  output={u.output_tokens}  cost_cents={u.cost_cents}  model={u.model}"
+            f"\n--- usage ---  input={u.input_tokens}  output={u.output_tokens}  cost=${u.cost_usd}  model={u.model}"
         )
 
 
@@ -193,8 +193,8 @@ def seed_assistant(
     owner_name: str = typer.Option(
         "Operator", "--owner-name", help="Owner row name (created if missing)."
     ),
-    monthly_budget_cents: int = typer.Option(
-        1000, "--monthly-budget-cents", help="Monthly cap in cents (default $10)."
+    monthly_budget_usd: float = typer.Option(
+        10.00, "--monthly-budget-usd", help="Monthly cap in USD (default $10.00)."
     ),
     model: str | None = typer.Option(
         None,
@@ -237,13 +237,15 @@ def seed_assistant(
         else (system_prompt or "be helpful and concise.")
     )
     senders = list(allowed_senders) if allowed_senders else [end_user_email]
+    from decimal import Decimal as _Decimal
+
     asyncio.run(
         _seed_assistant(
             inbound_address=inbound_address,
             end_user_email=end_user_email,
             end_user_name=end_user_name,
             owner_name=owner_name,
-            monthly_budget_cents=monthly_budget_cents,
+            monthly_budget_usd=_Decimal(str(monthly_budget_usd)),
             model=model,
             system_prompt=prompt_text,
             allowed_senders=senders,
@@ -258,7 +260,7 @@ async def _seed_assistant(
     end_user_email: str,
     end_user_name: str | None,
     owner_name: str,
-    monthly_budget_cents: int,
+    monthly_budget_usd,  # Decimal at runtime (untyped to keep imports lazy in this module)
     model: str | None,
     system_prompt: str,
     allowed_senders: list[str],
@@ -333,7 +335,7 @@ async def _seed_assistant(
             Budget(
                 id=budget_id,
                 assistant_id=assistant_id,
-                monthly_limit_cents=monthly_budget_cents,
+                monthly_limit_usd=monthly_budget_usd,
                 period_starts_at=period_start,
                 period_resets_at=period_reset,
             )
@@ -361,7 +363,7 @@ async def _seed_assistant(
 
     typer.secho(
         f"seeded: assistant={assistant_id}  owner={owner.id}  end_user={end_user.id}  "
-        f"budget={budget_id} ({monthly_budget_cents}c/mo)",
+        f"budget={budget_id} (${monthly_budget_usd}/mo)",
         fg="green",
     )
 

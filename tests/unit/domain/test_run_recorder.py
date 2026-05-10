@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,7 @@ async def _seed_run(
         Budget(
             id="b-1",
             assistant_id="a-1",
-            monthly_limit_cents=1000,
+            monthly_limit_usd=Decimal("10.00"),
             period_starts_at=datetime(2026, 5, 1, tzinfo=UTC),
             period_resets_at=datetime(2026, 6, 1, tzinfo=UTC),
         )
@@ -149,10 +150,13 @@ async def test_record_completion_writes_outbound_and_updates_run(
         ),
         steps=[
             RunStepRecord(
-                kind="model", input_summary="prompt", output_summary="reply", cost_cents=2
+                kind="model",
+                input_summary="prompt",
+                output_summary="reply",
+                cost_usd=Decimal("0.02"),
             )
         ],
-        usage=RunUsage(input_tokens=100, output_tokens=20, cost_cents=3),
+        usage=RunUsage(input_tokens=100, output_tokens=20, cost_usd=Decimal("0.03")),
     )
 
     await recorder.record_completion(completed)
@@ -181,7 +185,7 @@ async def test_record_completion_writes_outbound_and_updates_run(
 
         steps = (await session.execute(select(RunStep))).scalars().all()
         assert len(steps) == 1
-        assert steps[0].cost_cents == 2
+        assert steps[0].cost_usd == Decimal("0.02")
 
         usage_rows = (await session.execute(select(UsageLedger))).scalars().all()
         assert len(usage_rows) == 1
@@ -218,7 +222,7 @@ async def test_record_completion_idempotent_on_duplicate(
             message_id_header="<run-abc@x>",
         ),
         steps=[],
-        usage=RunUsage(input_tokens=0, output_tokens=0, cost_cents=0),
+        usage=RunUsage(input_tokens=0, output_tokens=0, cost_usd=Decimal("0")),
     )
 
     await recorder.record_completion(completed)
@@ -279,6 +283,6 @@ async def test_record_completion_raises_when_run_missing(
                 outbound=_outbound(),
                 sent=SentEmail(provider_message_id="x", message_id_header="<x>"),
                 steps=[],
-                usage=RunUsage(input_tokens=0, output_tokens=0, cost_cents=0),
+                usage=RunUsage(input_tokens=0, output_tokens=0, cost_usd=Decimal("0")),
             )
         )

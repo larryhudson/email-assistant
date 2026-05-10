@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from email_agent.domain.budget_governor import BudgetLimitReply
 from email_agent.domain.budget_reply import build_budget_limit_reply
@@ -40,7 +41,9 @@ def test_builds_threading_correct_envelope_with_re_prefix():
     reply = build_budget_limit_reply(
         inbound=_inbound(),
         scope=_scope(),
-        decision=BudgetLimitReply(monthly_limit_cents=1000, spent_cents=1000, days_until_reset=3),
+        decision=BudgetLimitReply(
+            monthly_limit_usd=Decimal("10.00"), spent_usd=Decimal("10.00"), days_until_reset=3
+        ),
         message_id_factory=lambda: "<run-abc@assistants.example.com>",
     )
 
@@ -58,7 +61,9 @@ def test_does_not_double_prefix_re():
     reply = build_budget_limit_reply(
         inbound=_inbound(subject="re: already replying"),
         scope=_scope(),
-        decision=BudgetLimitReply(monthly_limit_cents=1000, spent_cents=1000, days_until_reset=1),
+        decision=BudgetLimitReply(
+            monthly_limit_usd=Decimal("10.00"), spent_usd=Decimal("10.00"), days_until_reset=1
+        ),
         message_id_factory=lambda: "<run-abc@x>",
     )
 
@@ -69,7 +74,9 @@ def test_singular_day_when_one_day_left():
     reply = build_budget_limit_reply(
         inbound=_inbound(),
         scope=_scope(),
-        decision=BudgetLimitReply(monthly_limit_cents=1000, spent_cents=1000, days_until_reset=1),
+        decision=BudgetLimitReply(
+            monthly_limit_usd=Decimal("10.00"), spent_usd=Decimal("10.00"), days_until_reset=1
+        ),
         message_id_factory=lambda: "<run-abc@x>",
     )
 

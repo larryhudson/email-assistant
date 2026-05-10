@@ -2,6 +2,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,11 +23,11 @@ class BudgetLimitReply:
     """The assistant has hit its monthly cap; send a cheap template reply.
 
     Carries the numbers the template needs to tell the sender what happened
-    and when service resumes.
+    and when service resumes. Amounts are in USD as Decimal (4dp).
     """
 
-    monthly_limit_cents: int
-    spent_cents: int
+    monthly_limit_usd: Decimal
+    spent_usd: Decimal
     days_until_reset: int
 
 
@@ -36,9 +37,8 @@ BudgetDecision = Allow | BudgetLimitReply
 class BudgetGovernor:
     """Reads `usage_ledger` for the active period and decides whether to run.
 
-    Sits in front of every agent run (slice 5 wires this in). The decision is
-    a pure function of the ledger sum vs `Budget.monthly_limit_cents`; this
-    class owns the SQL.
+    Sits in front of every agent run. The decision is a pure function of the
+    ledger sum vs `Budget.monthly_limit_usd`; this class owns the SQL.
     """
 
     def __init__(
@@ -55,14 +55,17 @@ class BudgetGovernor:
             budget = await session.get(Budget, scope.budget_id)
             if budget is None:
                 raise LookupError(f"budget {scope.budget_id} not found")
-            spent_stmt = select(coalesce(sql_sum(UsageLedger.cost_cents), 0)).where(
+            spent_stmt = select(coalesce(sql_sum(UsageLedger.cost_usd), Decimal("0"))).where(
                 UsageLedger.assistant_id == scope.assistant_id,
                 UsageLedger.created_at >= budget.period_starts_at,
                 UsageLedger.created_at < budget.period_resets_at,
             )
-            spent = (await session.execute(spent_stmt)).scalar_one()
+            spent_raw = (await session.execute(spent_stmt)).scalar_one()
+            spent: Decimal = (
+                spent_raw if isinstance(spent_raw, Decimal) else Decimal(str(spent_raw))
+            )
 
-        if spent < budget.monthly_limit_cents:
+        if spent < budget.monthly_limit_usd:
             return Allow()
 
         period_resets_at = budget.period_resets_at
@@ -72,8 +75,8 @@ class BudgetGovernor:
         remaining = period_resets_at - self._now()
         days_until_reset = max(0, math.ceil(remaining.total_seconds() / 86400))
         return BudgetLimitReply(
-            monthly_limit_cents=budget.monthly_limit_cents,
-            spent_cents=spent,
+            monthly_limit_usd=budget.monthly_limit_usd,
+            spent_usd=spent,
             days_until_reset=days_until_reset,
         )
 

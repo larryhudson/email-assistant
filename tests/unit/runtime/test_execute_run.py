@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic_ai.messages import (
@@ -42,7 +43,7 @@ async def _seed_assistant(session: AsyncSession) -> None:
         Budget(
             id="b-1",
             assistant_id="a-1",
-            monthly_limit_cents=1000,
+            monthly_limit_usd=Decimal("10.00"),
             period_starts_at=datetime(2026, 5, 1, tzinfo=UTC),
             period_resets_at=datetime(2026, 6, 1, tzinfo=UTC),
         )
@@ -237,7 +238,7 @@ async def test_execute_run_sends_template_when_budget_exceeded(
                 model="seed",
                 input_tokens=0,
                 output_tokens=0,
-                cost_cents=1000,
+                cost_usd=Decimal("10.00"),
                 budget_period="2026-05",
                 created_at=datetime(2026, 5, 5, tzinfo=UTC),
             )
