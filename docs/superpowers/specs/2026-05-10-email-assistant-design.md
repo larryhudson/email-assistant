@@ -131,7 +131,7 @@ class MemoryPort(Protocol):
 Invariant: every operation receives `assistant_id`. Adapters must enforce scope isolation and never return memory from another assistant.
 
 Adapters:
-- `CogneeMemoryAdapter` (real) — uses `cognee.remember`, `cognee.search`, `@cognee.agent_memory(session_id=thread_id, save_session_traces=True)` for auto-curation. Per-assistant isolation via separate cognee data/system roots keyed by `assistant_id`.
+- `CogneeMemoryAdapter` (real) — uses `cognee.remember`, `cognee.search`, `@cognee.agent_memory(session_id=thread_id, save_session_traces=True)` for auto-curation. Per-assistant isolation: separate `data_root_directory` and `system_root_directory` rooted at `data/cognee/<assistant_id>/`. Cognee config is module-global, so the adapter holds a process-wide `asyncio.Lock` and switches config under the lock around each cognee call. (Per-assistant `queueing_lock` in Procrastinate already serializes `run_agent` jobs per assistant, but `curate_memory` jobs and admin reads can race; the global lock makes that safe.)
 - `InMemoryMemoryAdapter` (tests) — dict keyed by `(assistant_id, thread_id)`.
 
 #### `AssistantSandbox`
@@ -391,6 +391,144 @@ Priority tests:
 6. **Cognee memory adapter** — `CogneeMemoryAdapter` implementing recall + per-thread session memory + auto-curation.
 7. **Procrastinate background jobs** — `curate_memory` job, threshold notifications.
 8. **Admin UI** — assistants, runs, threads, memory, budget, sandbox views.
+
+## Implementation details
+
+### Repo layout
+
+```
+email-assistant/
+  src/email_assistant/
+    models/                 # NormalizedInboundEmail, AgentReply, AssistantScope, ToolCall, ...
+    ports/                  # EmailProvider, MemoryPort, AssistantSandbox protocols
+    adapters/
+      mailgun/              # MailgunEmailProvider
+      cognee/               # CogneeMemoryAdapter
+      docker_sandbox/       # DockerSandbox
+      inmemory/             # in-memory adapters for tests
+    domain/
+      router.py             # AssistantRouter
+      budget_governor.py    # BudgetGovernor
+      thread_resolver.py    # ThreadResolver
+      workspace_projector.py
+      reply_envelope.py
+      run_recorder.py
+    agent/                  # AssistantAgent (PydanticAI wrapper) + tool fns
+    runtime/                # AssistantRuntime
+    jobs/                   # Procrastinate job definitions
+    web/
+      webhook.py            # FastAPI webhook handler
+      admin/                # Jinja templates + admin views
+    db/
+      models.py             # SQLAlchemy 2.0 async ORM
+      migrations/           # Alembic
+    config.py               # pydantic-settings
+    cli.py                  # typer commands
+    main.py                 # FastAPI app factory + worker entry
+  tests/
+    unit/
+    integration/
+    fixtures/emails/        # .eml files for offline dev
+  docker-compose.yml
+  docker-compose.dev.yml
+  pyproject.toml
+```
+
+ORM: **SQLAlchemy 2.0 async** + Alembic. CLI: **typer**.
+
+One file per `domain/` module — they each grow.
+
+### Configuration
+
+`pydantic-settings` reading `.env`. All operator/secret config in env, all per-assistant config in DB.
+
+```python
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_nested_delimiter="__")
+
+    database_url: PostgresDsn
+
+    mailgun_signing_key: SecretStr
+    mailgun_api_key: SecretStr
+    mailgun_domain: str
+    mailgun_webhook_url: HttpUrl
+
+    deepseek_api_key: SecretStr
+    deepseek_base_url: HttpUrl = "https://api.deepseek.com/v1"
+
+    cognee_llm_api_key: SecretStr
+    cognee_embedding_api_key: SecretStr
+    cognee_embedding_model: str = "text-embedding-3-small"
+
+    sandbox_image: str = "email-assistant-sandbox:latest"
+    sandbox_data_root: Path = Path("data/sandboxes")  # HOST path, not worker-internal
+    sandbox_idle_shutdown_minutes: int = 30
+    sandbox_run_timeout_seconds: int = 300
+    sandbox_bash_timeout_seconds: int = 60
+    sandbox_memory_mb: int = 512
+    sandbox_cpu_cores: float = 1.0
+
+    attachments_root: Path = Path("data/attachments")
+    cognee_data_root: Path = Path("data/cognee")
+    run_inputs_root: Path = Path("data/run_inputs")
+
+    admin_bind_host: str = "127.0.0.1"
+    admin_bind_port: int = 8001
+```
+
+### Concurrency
+
+Per-assistant serialization for `run_agent` jobs via Procrastinate `queueing_lock=f"assistant-{assistant_id}"`. Procrastinate queues additional jobs and runs them sequentially when the lock is held.
+
+`curate_memory` jobs do **not** take the assistant lock — they only touch Cognee, which is already serialized by the adapter's global lock. Admin reads also go through the adapter's lock.
+
+### Sandbox control plane
+
+Worker container mounts `/var/run/docker.sock`. Worker uses the Python `docker` SDK to start, stop, and `exec` per-assistant containers. Bind-mount sources passed to the docker daemon are **host paths**, so `Settings.sandbox_data_root` (and similar) must be host paths. The docker-compose file mounts `./data` to the same absolute path inside the worker so the path resolves identically on both sides.
+
+Trade-off: docker-socket access is effectively host-root. Acceptable for a single-operator self-hosted MVP. The `InMemorySandbox` adapter avoids docker entirely for tests.
+
+### Local dev
+
+Two complementary paths:
+
+- **cloudflared quick tunnel** (`cloudflared tunnel --url http://localhost:8000`) for end-to-end testing against real Mailgun. Restart = new URL; fine for ad-hoc work. Promote to a named tunnel later if it becomes annoying.
+- **`email-assistant inject-email <fixture.eml> --to <inbound-address>` CLI** for the 90% of dev that doesn't need real Mailgun. Parses an `.eml`, constructs a `NormalizedInboundEmail` directly, and calls `runtime.accept_inbound`. Fixtures under `tests/fixtures/emails/`.
+
+A `docker-compose.dev.yml` provides hot-reload (`uvicorn --reload`) and a worker with auto-restart.
+
+### Bootstrap CLI
+
+`typer`-based `email-assistant` command:
+
+| Command | Purpose |
+| --- | --- |
+| `init` | Read `.env`, create owner row + admin row for operator email. Idempotent. |
+| `create-end-user --email --name` | Create an end user. |
+| `create-assistant --end-user --inbound-address --model --monthly-budget --allowed-senders --system-prompt-file` | Create assistant + budget + assistant_scope. |
+| `pause-assistant <id>` / `resume-assistant <id>` | Toggle status. |
+| `reset-sandbox <id>` | Stop and recreate the container; wipes `/workspace`. |
+| `inject-email <path> --to <address>` | Local dev: inject a fixture .eml as inbound. |
+| `migrate` | `alembic upgrade head`. |
+| `worker` | Run the Procrastinate worker. |
+| `web` | Run uvicorn for webhook + admin. |
+
+### Email body handling
+
+Inbound:
+- Store both `body_text` and `body_html` from Mailgun's parsed payload as-received. No quoted-reply stripping, no signature stripping — the workspace already gives the agent structured access to prior messages, so the trade-off favours fidelity.
+- `EmailWorkspaceProjector` writes:
+  - `<NNNN-…>.md` — frontmatter (from/to/date/subject/headers + `html: <NNNN-…>.html` if HTML companion exists) + plain body.
+  - `<NNNN-…>.html` — only when HTML body is present. Lets the agent fall back to the HTML version when the plain text is mangled (e.g. forwarded newsletters).
+
+Outbound:
+- Plain text only for MVP. Mum's mail client renders it fine.
+
+### Memory recall query
+
+`AssistantRuntime.execute_run` calls `MemoryPort.recall(assistant_id, thread_id, query=truncate(inbound.body_text, 2000))` once before agent invocation, and includes the result in the prompt. Trade-off: an extra Cognee call on every run regardless of whether memory is relevant, but reliable behaviour. Revisit by replacing `truncate` with a small LLM-extracted query (option B) if recall quality becomes a problem.
+
+The agent additionally has the `memory_search` tool for ad-hoc lookups during the run.
 
 ## Open items deferred from MVP
 
