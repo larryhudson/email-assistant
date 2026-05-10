@@ -31,6 +31,8 @@ async def sandbox(
 ) -> AsyncIterator["object"]:  # type: ignore[name-defined]
     import contextlib
 
+    import docker.errors
+
     import docker
     from email_agent.sandbox.docker import DockerSandbox
 
