@@ -56,6 +56,17 @@ class CogneeMemoryAdapter:
             results = await cognee.recall(query)
         return [self._to_memory(r) for r in results]
 
+    async def seed_durable(self, assistant_id: str, content: str) -> None:
+        """Seed a fact into the assistant's durable graph (no session id).
+
+        Not part of `MemoryPort` — this is an ops affordance for the
+        `seed-memory` CLI. Stores via `cognee.remember(content)` (no
+        session_id), so the fact lands in the per-assistant graph and is
+        recallable from any thread.
+        """
+        async with self._scope(assistant_id):
+            await cognee.remember(content)
+
     async def delete_assistant(self, assistant_id: str) -> None:
         target = self._assistant_root(assistant_id)
         async with self._lock:
@@ -82,8 +93,10 @@ class _AssistantScope:
 
     async def __aenter__(self) -> None:
         await self._lock.acquire()
-        data_dir = self._assistant_root / "data"
-        system_dir = self._assistant_root / "system"
+        # Cognee's data ingestion builds file:// URIs from data_root_directory,
+        # which fails on relative paths. Resolve to absolute before the swap.
+        data_dir = (self._assistant_root / "data").resolve()
+        system_dir = (self._assistant_root / "system").resolve()
         data_dir.mkdir(parents=True, exist_ok=True)
         system_dir.mkdir(parents=True, exist_ok=True)
         cognee.config.data_root_directory(str(data_dir))

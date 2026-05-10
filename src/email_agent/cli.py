@@ -404,5 +404,55 @@ def web(
     )
 
 
+@app.command("seed-memory")
+def seed_memory(
+    assistant_id: str = typer.Option(
+        ...,
+        "--assistant",
+        help="Assistant id (e.g. a-3f5aad0e). Memory is stored under that "
+        "assistant's per-assistant cognee root.",
+    ),
+    fact: str = typer.Option(
+        ...,
+        "--fact",
+        help="The fact to remember. Plain text — anything cognee can ingest.",
+    ),
+    session_id: str | None = typer.Option(
+        None,
+        "--session-id",
+        help="Optional thread/session id. Without it, the fact lands in the "
+        "durable graph (recallable across all threads).",
+    ),
+) -> None:
+    """Seed a fact into a specific assistant's cognee memory.
+
+    Useful for demoing recall and bootstrapping an assistant with prior
+    context before any real run. Stores under the same per-assistant data
+    root the runtime uses, so subsequent inject-email runs will recall it.
+    """
+    from email_agent.composition import make_cognee_memory
+    from email_agent.config import Settings
+    from email_agent.memory.cognee import CogneeMemoryAdapter
+
+    async def _run() -> None:
+        settings = Settings()  # ty: ignore[missing-argument]
+        memory = make_cognee_memory(settings)
+        assert isinstance(memory, CogneeMemoryAdapter)
+        if session_id is None:
+            await memory.seed_durable(assistant_id, fact)
+            where = "durable graph"
+        else:
+            await memory.record_turn(
+                assistant_id=assistant_id,
+                thread_id=session_id,
+                role="seed",
+                content=fact,
+            )
+            where = f"session={session_id}"
+        typer.secho(f"seeded fact for assistant={assistant_id}  ({where})", fg="green")
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     app()

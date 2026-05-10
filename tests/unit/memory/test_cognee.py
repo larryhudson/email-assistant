@@ -72,7 +72,7 @@ async def test_record_turn_swaps_config_before_calling_remember(
     assert session_id == "t-1"
     # The data_root_directory must already be the per-assistant path at the
     # moment cognee.remember runs.
-    assert observed_root == str(tmp_path / "a-1" / "data")
+    assert observed_root == str((tmp_path / "a-1" / "data").resolve())
 
 
 @pytest.mark.asyncio
@@ -88,7 +88,7 @@ async def test_recall_returns_memory_context_with_per_assistant_root(
     query, session_id, observed_root = fake_cognee.recall_calls[0]
     assert query == "what about sourdough"
     assert session_id == "t-9"
-    assert observed_root == str(tmp_path / "a-2" / "data")
+    assert observed_root == str((tmp_path / "a-2" / "data").resolve())
     assert {m.content for m in ctx.memories} == {
         "sourdough is great",
         "user prefers detail",

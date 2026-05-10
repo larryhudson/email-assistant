@@ -58,13 +58,27 @@ def make_cognee_memory(settings: Settings) -> "MemoryPort":
     `data_root_directory` / `system_root_directory` are switched under the
     adapter's lock per call (see `CogneeMemoryAdapter`).
     """
+    import os
+
     import cognee
 
     from email_agent.memory.cognee import CogneeMemoryAdapter
 
+    if settings.cognee_skip_connection_test:
+        os.environ["COGNEE_SKIP_CONNECTION_TEST"] = "true"
+
+    cognee.config.set_llm_provider(settings.cognee_llm_provider)
+    cognee.config.set_llm_model(settings.cognee_llm_model)
     cognee.config.set_llm_api_key(settings.cognee_llm_api_key.get_secret_value())
-    cognee.config.set_embedding_api_key(settings.cognee_embedding_api_key.get_secret_value())
+    if settings.cognee_llm_endpoint is not None:
+        cognee.config.set_llm_endpoint(settings.cognee_llm_endpoint)
+
+    cognee.config.set_embedding_provider(settings.cognee_embedding_provider)
     cognee.config.set_embedding_model(settings.cognee_embedding_model)
+    cognee.config.set_embedding_api_key(settings.cognee_embedding_api_key.get_secret_value())
+    if settings.cognee_embedding_endpoint is not None:
+        cognee.config.set_embedding_endpoint(settings.cognee_embedding_endpoint)
+    cognee.config.set_embedding_dimensions(settings.cognee_embedding_dimensions)
 
     settings.cognee_data_root.mkdir(parents=True, exist_ok=True)
     return CogneeMemoryAdapter(data_root=settings.cognee_data_root)
