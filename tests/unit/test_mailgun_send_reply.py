@@ -121,7 +121,7 @@ async def test_send_reply_omits_threading_headers_when_absent(mock_transport_fac
     assert "h:References" not in fields
 
 
-async def _deferred_attachments_test(mock_transport_factory):
+async def test_send_reply_attaches_files(mock_transport_factory):
     transport, captured = mock_transport_factory(
         httpx.Response(200, json={"id": "<x@y>", "message": "Queued"})
     )
