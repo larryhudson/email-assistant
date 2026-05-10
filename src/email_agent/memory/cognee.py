@@ -53,10 +53,36 @@ class CogneeMemoryAdapter:
         self._counter = count(1)
         self._users: dict[str, User] = {}
         self._user_locks: dict[str, asyncio.Lock] = {}
+        self._setup_lock = asyncio.Lock()
+        self._setup_done = False
+
+    async def _ensure_setup(self) -> None:
+        """Run cognee.setup() once per process. Creates the relational +
+        vector tables that `get_user_by_email` and `create_user` need to
+        exist before any user-management call works. Idempotent in cognee
+        — repeat calls are cheap once tables exist."""
+        if self._setup_done:
+            return
+        async with self._setup_lock:
+            if self._setup_done:
+                return
+            from cognee.modules.engine.operations.setup import setup
+
+            await setup()
+            self._setup_done = True
 
     async def record_turn(self, assistant_id: str, thread_id: str, role: str, content: str) -> None:
+        # We deliberately don't pass session_id. Cognee's session-memory
+        # write path creates a `datasets` row but skips the ACL grants
+        # that `create_authorized_dataset` makes — so the subsequent
+        # `improve()` bridge fails with "User does not have write access".
+        # Writing straight to the durable graph triggers proper dataset
+        # creation + permissions, and recall (which still passes
+        # session_id) falls through to the graph anyway. We keep the
+        # thread_id in the prefix so the agent can distinguish turns
+        # from different threads in retrieved chunks.
         user = await self._user_for(assistant_id)
-        await cognee.remember(f"[{role}] {content}", session_id=thread_id, user=user)
+        await cognee.remember(f"[thread:{thread_id} role:{role}] {content}", user=user)
 
     async def recall(self, assistant_id: str, thread_id: str, query: str) -> MemoryContext:
         user = await self._user_for(assistant_id)
@@ -113,6 +139,7 @@ class CogneeMemoryAdapter:
         cached = self._users.get(assistant_id)
         if cached is not None:
             return cached
+        await self._ensure_setup()
         # Per-assistant lock so concurrent first-touches for the same
         # assistant don't race two create_user calls.
         lock = self._user_locks.setdefault(assistant_id, asyncio.Lock())
@@ -133,7 +160,11 @@ class CogneeMemoryAdapter:
 
     @staticmethod
     def _assistant_email(assistant_id: str) -> str:
-        return f"assistant-{assistant_id}@email-agent.local"
+        # `example.com` is the RFC 2606 reserved-for-documentation domain.
+        # Cognee's email validator (pydantic EmailStr → email_validator)
+        # rejects "special-use" TLDs like .local / .invalid / .test, but
+        # accepts example.com because it's a regular .com.
+        return f"assistant-{assistant_id}@example.com"
 
     def _to_memory(self, raw: dict[str, Any]) -> Memory:
         # cognee.recall(query_type=CHUNKS, only_context=True) returns dicts of
