@@ -293,3 +293,33 @@ async def test_run_tool_bash_times_out(sandbox, assistant_id):
     assert result.ok is False
     assert result.error is not None
     assert "timeout" in result.error.lower() or "timed out" in result.error.lower()
+
+
+async def test_attach_file_validates_existence_and_read_attachment_out(sandbox, assistant_id):
+    from email_agent.models.sandbox import ToolCall
+
+    await sandbox.ensure_started(assistant_id)
+    await sandbox.run_tool(
+        assistant_id,
+        "r-1",
+        ToolCall(kind="write", path="notes/report.pdf", content="%PDF-1.7"),
+    )
+
+    attach_result = await sandbox.run_tool(
+        assistant_id, "r-1", ToolCall(kind="attach_file", path="notes/report.pdf")
+    )
+    assert attach_result.ok is True
+
+    bytes_out = await sandbox.read_attachment_out(assistant_id, "r-1", "notes/report.pdf")
+    assert bytes_out == b"%PDF-1.7"
+
+
+async def test_attach_file_missing_file_fails(sandbox, assistant_id):
+    from email_agent.models.sandbox import ToolCall
+
+    await sandbox.ensure_started(assistant_id)
+    result = await sandbox.run_tool(
+        assistant_id, "r-1", ToolCall(kind="attach_file", path="nope.pdf")
+    )
+    assert result.ok is False
+    assert result.error is not None

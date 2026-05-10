@@ -154,7 +154,32 @@ class DockerSandbox:
         if call.kind == "bash":
             assert call.command is not None
             return self._run_bash(container, call.command)
+        if call.kind == "attach_file":
+            assert call.path is not None
+            absolute = self._resolve_workspace_path(call.path)
+            code, _ = container.exec_run(["test", "-f", absolute])
+            if code != 0:
+                return ToolResult(ok=False, error=f"attach_file: {call.path} not found")
+            return ToolResult(ok=True)
         raise NotImplementedError(f"run_tool: {call.kind} lands in a later task")
+
+    async def read_attachment_out(self, assistant_id: str, run_id: str, path: str) -> bytes:
+        return await asyncio.to_thread(self._read_attachment_out_sync, assistant_id, path)
+
+    def _read_attachment_out_sync(self, assistant_id: str, path: str) -> bytes:
+        container = self._container(assistant_id)
+        absolute = self._resolve_workspace_path(path)
+        bits, _ = container.get_archive(absolute)
+        # bits is an iterator of tar chunks; reassemble and extract the single file.
+        buf = io.BytesIO(b"".join(bits))
+        buf.seek(0)
+        with tarfile.open(fileobj=buf, mode="r") as tar:
+            for member in tar:
+                if member.isfile():
+                    extracted = tar.extractfile(member)
+                    if extracted is not None:
+                        return extracted.read()
+        raise FileNotFoundError(f"no file found in archive for {path}")
 
     def _run_bash(self, container: "Container", command: str) -> ToolResult:
         timeout_s = self._bash_timeout_seconds
