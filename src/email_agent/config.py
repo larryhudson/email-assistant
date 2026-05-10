@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     cognee_embedding_api_key: SecretStr
     cognee_embedding_model: str = "text-embedding-3-small"
 
-    sandbox_image: str = "email-assistant-sandbox:latest"
+    sandbox_image: str = "email-agent-sandbox:slice4"
     sandbox_data_root: Path = Path("data/sandboxes")
     sandbox_idle_shutdown_minutes: int = 30
     sandbox_run_timeout_seconds: int = 300
