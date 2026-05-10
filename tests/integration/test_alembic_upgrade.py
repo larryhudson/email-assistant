@@ -28,6 +28,7 @@ async def test_alembic_upgrade_head_creates_expected_tables():
         "message_index",
         "agent_runs",
         "run_steps",
+        "run_memory_recalls",
         "usage_ledger",
         "budgets",
         "alembic_version",

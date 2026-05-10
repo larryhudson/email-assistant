@@ -24,6 +24,7 @@ from email_agent.db.models import (
     EmailThread,
     EndUser,
     Owner,
+    RunMemoryRecall,
 )
 from email_agent.domain.budget_governor import (
     Allow,
@@ -50,6 +51,7 @@ from email_agent.models.email import (
     NormalizedOutboundEmail,
     SentEmail,
 )
+from email_agent.models.memory import Memory
 from email_agent.models.sandbox import (
     PendingAttachment,
     ProjectedFile,
@@ -271,6 +273,7 @@ class AssistantRuntime:
             thread_id=thread.id,
             query=recall_query,
         )
+        await self._persist_memory_recalls(run_id, memory_context.memories)
         if memory_context.memories:
             memory_block = "\n\nRecalled memory:\n" + "\n".join(
                 f"- {m.content}" for m in memory_context.memories
@@ -344,6 +347,27 @@ class AssistantRuntime:
         )
 
         return Completed(run_id=run_id, sent=sent)
+
+    async def _persist_memory_recalls(self, run_id: str, memories: list[Memory]) -> None:
+        """Snapshot what `MemoryPort.recall` returned for this run so the
+        admin trace view can show the agent's actual context window. We
+        store this rather than re-running recall later because durable
+        memory grows between calls — re-running would produce a different
+        answer than the agent saw."""
+        if not memories:
+            return
+        async with self._session_factory() as session:
+            for m in memories:
+                session.add(
+                    RunMemoryRecall(
+                        id=f"rmr-{uuid.uuid4().hex[:8]}",
+                        run_id=run_id,
+                        memory_id=m.id,
+                        content=m.content,
+                        score=m.score,
+                    )
+                )
+            await session.commit()
 
     async def _load_run(
         self, run_id: str
