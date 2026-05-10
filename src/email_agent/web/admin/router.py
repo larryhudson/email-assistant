@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 _HERE = Path(__file__).parent
 _TEMPLATES = Jinja2Templates(directory=str(_HERE / "templates"))
-_STATIC_DIR = _HERE / "static"
+ADMIN_STATIC_DIR = _HERE / "static"
 
 _PAGE_SIZE = 50
 
@@ -114,7 +114,9 @@ class _RunDetailPayload(BaseModel):
 
 def make_admin_router(session_factory: async_sessionmaker[AsyncSession]) -> APIRouter:
     router = APIRouter()
-    router.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="admin-static")
+    # Static files are mounted on the parent app, not the router —
+    # `router.mount()` doesn't compose with `include_router(prefix=...)`.
+    # See `mount_admin` below.
 
     @router.get("/", response_class=HTMLResponse)
     async def assistants_list(request: Request) -> HTMLResponse:
@@ -171,6 +173,12 @@ def make_admin_router(session_factory: async_sessionmaker[AsyncSession]) -> APIR
         )
 
     return router
+
+
+def mount_admin(app, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """Mount the admin router + its static files on a FastAPI app at /admin."""
+    app.include_router(make_admin_router(session_factory), prefix="/admin")
+    app.mount("/admin/static", StaticFiles(directory=str(ADMIN_STATIC_DIR)), name="admin-static")
 
 
 async def _load_assistants(

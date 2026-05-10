@@ -77,9 +77,9 @@ def build_app(
     app = FastAPI(title="email-assistant")
 
     if session_factory is not None:
-        from email_agent.web.admin.router import make_admin_router
+        from email_agent.web.admin.router import mount_admin
 
-        app.include_router(make_admin_router(session_factory), prefix="/admin")
+        mount_admin(app, session_factory)
 
     @app.post("/webhooks/mailgun")
     async def mailgun_webhook(request: Request) -> Response:
