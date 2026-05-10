@@ -1,0 +1,995 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Email Agent Memory Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --font-body: "IBM Plex Sans", system-ui, sans-serif;
+      --font-mono: "IBM Plex Mono", "SF Mono", Consolas, monospace;
+      --bg: #faf7f5;
+      --surface: #ffffff;
+      --surface2: #f3eee9;
+      --surface3: #ebe3dc;
+      --border: rgba(41, 32, 23, 0.10);
+      --border-strong: rgba(41, 32, 23, 0.18);
+      --text: #292017;
+      --text-dim: #776a5f;
+      --accent: #c2410c;
+      --accent-dim: rgba(194, 65, 12, 0.10);
+      --sage: #4d7c0f;
+      --sage-dim: rgba(77, 124, 15, 0.10);
+      --teal: #0f766e;
+      --teal-dim: rgba(15, 118, 110, 0.10);
+      --amber: #b45309;
+      --amber-dim: rgba(180, 83, 9, 0.10);
+      --rose: #9f1239;
+      --rose-dim: rgba(159, 18, 57, 0.10);
+      --shadow: 0 18px 48px rgba(41, 32, 23, 0.08);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #171311;
+        --surface: #211b18;
+        --surface2: #2a221e;
+        --surface3: #352b25;
+        --border: rgba(255, 255, 255, 0.08);
+        --border-strong: rgba(255, 255, 255, 0.15);
+        --text: #eee6df;
+        --text-dim: #ad9e91;
+        --accent: #fb923c;
+        --accent-dim: rgba(251, 146, 60, 0.13);
+        --sage: #a3e635;
+        --sage-dim: rgba(163, 230, 53, 0.10);
+        --teal: #5eead4;
+        --teal-dim: rgba(94, 234, 212, 0.11);
+        --amber: #fbbf24;
+        --amber-dim: rgba(251, 191, 36, 0.11);
+        --rose: #fda4af;
+        --rose-dim: rgba(253, 164, 175, 0.11);
+        --shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: var(--font-body);
+      background:
+        radial-gradient(ellipse at 16% 0%, var(--accent-dim), transparent 42%),
+        radial-gradient(ellipse at 85% 18%, var(--teal-dim), transparent 34%),
+        linear-gradient(180deg, var(--bg), color-mix(in srgb, var(--bg) 92%, var(--surface3) 8%));
+      padding: 36px;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .wrap {
+      max-width: 1360px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 40px;
+    }
+
+    .toc {
+      position: sticky;
+      top: 24px;
+      align-self: start;
+      max-height: calc(100dvh - 48px);
+      overflow-y: auto;
+      padding-top: 8px;
+    }
+
+    .toc-title {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text-dim);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      padding-bottom: 12px;
+      margin-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .toc a {
+      display: block;
+      color: var(--text-dim);
+      text-decoration: none;
+      font-size: 12px;
+      line-height: 1.35;
+      padding: 7px 9px;
+      border-left: 2px solid transparent;
+      border-radius: 6px;
+    }
+
+    .toc a:hover, .toc a.active {
+      color: var(--text);
+      background: var(--surface2);
+      border-left-color: var(--accent);
+    }
+
+    .main { min-width: 0; }
+
+    header {
+      margin-bottom: 28px;
+      animation: fadeUp 0.4s ease-out both;
+    }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--accent);
+      font-weight: 600;
+      letter-spacing: 1.6px;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      font-size: clamp(36px, 5vw, 64px);
+      line-height: 0.98;
+      letter-spacing: 0;
+      margin: 0 0 16px;
+      max-width: 980px;
+    }
+
+    .subtitle {
+      color: var(--text-dim);
+      font-size: 18px;
+      line-height: 1.55;
+      max-width: 900px;
+      margin: 0;
+    }
+
+    .sec-head {
+      font-family: var(--font-mono);
+      color: var(--text-dim);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      margin: 34px 0 12px;
+      scroll-margin-top: 28px;
+    }
+
+    .panel, .lane, .decision, .store, .step {
+      animation: fadeUp 0.42s ease-out both;
+      animation-delay: calc(var(--i, 0) * 0.045s);
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 22px;
+      box-shadow: var(--shadow);
+    }
+
+    .hero-panel {
+      border-color: color-mix(in srgb, var(--border) 55%, var(--accent) 45%);
+      background: color-mix(in srgb, var(--surface) 92%, var(--accent) 8%);
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .metric {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 24px;
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+
+    .metric span, p, li {
+      color: var(--text-dim);
+      line-height: 1.55;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(150px, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-top: 3px solid var(--accent);
+      border-radius: 8px;
+      padding: 16px;
+      position: relative;
+      min-height: 142px;
+    }
+
+    .step:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      right: -10px;
+      top: 50%;
+      width: 16px;
+      height: 2px;
+      background: var(--border-strong);
+    }
+
+    .step h3, .store h3, .decision h3, .lane h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 7px;
+      margin-bottom: 10px;
+    }
+
+    .tag.accent { color: var(--accent); background: var(--accent-dim); }
+    .tag.sage { color: var(--sage); background: var(--sage-dim); }
+    .tag.teal { color: var(--teal); background: var(--teal-dim); }
+    .tag.amber { color: var(--amber); background: var(--amber-dim); }
+    .tag.rose { color: var(--rose); background: var(--rose-dim); }
+
+    .stores {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .store {
+      border: 1px solid var(--border);
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    .store ul, .decision ul {
+      padding-left: 18px;
+      margin: 10px 0 0;
+    }
+
+    .sequence {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    .lane {
+      display: grid;
+      grid-template-columns: 170px 1fr 120px;
+      gap: 16px;
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 14px 16px;
+    }
+
+    .lane code, .schema code, .code {
+      font-family: var(--font-mono);
+      color: var(--text);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 2px 5px;
+      font-size: 12px;
+    }
+
+    .lane .when {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    .decision {
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--amber);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 18px;
+    }
+
+    .schema {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .table-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .table-card h3 {
+      margin: 0;
+      padding: 12px 14px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+
+    .table-card ul {
+      margin: 0;
+      padding: 12px 14px 14px 28px;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    .callout {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--teal);
+      border-radius: 8px;
+      padding: 16px 18px;
+      margin-top: 14px;
+    }
+
+    .review-note {
+      border: 1px dashed var(--border-strong);
+      background: color-mix(in srgb, var(--surface) 82%, var(--rose-dim) 18%);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    @media (max-width: 1100px) {
+      body { padding: 0 24px 32px; }
+      .wrap { grid-template-columns: 1fr; gap: 0; }
+      .toc {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: flex;
+        gap: 4px;
+        overflow-x: auto;
+        max-height: none;
+        margin: 0 -24px 22px;
+        padding: 10px 24px;
+        background: var(--bg);
+        border-bottom: 1px solid var(--border);
+      }
+      .toc-title { display: none; }
+      .toc a {
+        white-space: nowrap;
+        flex: 0 0 auto;
+        border-left: 0;
+        border-bottom: 2px solid transparent;
+      }
+      .toc a.active { border-bottom-color: var(--accent); }
+      header { padding-top: 22px; }
+      .flow, .stores, .schema, .grid-3, .grid-2 { grid-template-columns: 1fr; }
+      .step:not(:last-child)::after { display: none; }
+      .lane { grid-template-columns: 1fr; gap: 6px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-delay: 0ms !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav class="toc" id="toc" aria-label="Sections">
+      <div class="toc-title">Review</div>
+      <a href="#overview" class="active">Overview</a>
+      <a href="#runtime">Runtime Flow</a>
+      <a href="#tenancy">Tenancy</a>
+      <a href="#threading">Threading</a>
+      <a href="#memory">Memory Model</a>
+      <a href="#storage">Storage</a>
+      <a href="#admin">Admin</a>
+      <a href="#cost">Cost</a>
+      <a href="#email-port">Email Port</a>
+      <a href="#memory-port">Memory Port</a>
+      <a href="#decisions">Decisions</a>
+      <a href="#deepening">Deepening</a>
+      <a href="#review">Questions</a>
+    </nav>
+
+    <main class="main">
+      <header id="overview">
+        <div class="eyebrow">High-level design</div>
+        <h1>Email agents with isolated memory</h1>
+        <p class="subtitle">
+          A single stack can host one or more email assistants. Each inbound email webhook is
+          normalized through an email provider adapter, routed to the right assistant, retrieves
+          only that assistant's memory, performs work, sends a reply, then records the run for
+          future messages and admin review.
+        </p>
+      </header>
+
+      <section class="panel hero-panel" style="--i: 1">
+        <div class="grid-3">
+          <div class="metric">
+            <strong>1 stack</strong>
+            <span>starts with you as admin and your mum as the regular user, while still allowing your own assistant later.</span>
+          </div>
+          <div class="metric">
+            <strong>isolated scope</strong>
+            <span>assistant, user, memory, tools, and budget are resolved before any agent run.</span>
+          </div>
+          <div class="metric">
+            <strong>admin view</strong>
+            <span>lets you inspect runs, costs, memory, failures, and limits without exposing UI to the end user.</span>
+          </div>
+        </div>
+      </section>
+
+      <div id="runtime" class="sec-head">01 — Runtime Flow</div>
+      <section class="panel">
+        <div class="flow">
+          <article class="step" style="--i: 2">
+            <span class="tag accent">Webhook</span>
+            <h3>Receive inbound</h3>
+            <p>Validate the provider webhook, then normalize body text, sender, recipient, attachments, and headers.</p>
+          </article>
+          <article class="step" style="--i: 3">
+            <span class="tag amber">Route</span>
+            <h3>Resolve assistant</h3>
+            <p>Map the inbound address to an assistant profile, owner, end user, budget, tools, and memory scope.</p>
+          </article>
+          <article class="step" style="--i: 4">
+            <span class="tag teal">Recall</span>
+            <h3>Load memory</h3>
+            <p>After the budget gate passes, resolve the thread and fetch memory only inside that assistant scope.</p>
+          </article>
+          <article class="step" style="--i: 5">
+            <span class="tag sage">Agent</span>
+            <h3>Act and draft</h3>
+            <p>Call tools, produce a final reply, and keep a structured trace of important actions.</p>
+          </article>
+          <article class="step" style="--i: 6">
+            <span class="tag rose">Reply + learn</span>
+            <h3>Send, then persist</h3>
+            <p>Reply through the email provider adapter first; then store messages, traces, and extracted durable memory.</p>
+          </article>
+        </div>
+        <div class="callout">
+          <strong>Critical path:</strong> validation, assistant resolution, budget check, thread resolution,
+          memory recall, agent execution, and sending the reply. Heavy summarization, embedding,
+          and memory consolidation should run after sending.
+        </div>
+      </section>
+
+      <div id="tenancy" class="sec-head">02 — Assistant Isolation Model</div>
+      <section class="panel">
+        <div class="schema">
+          <div class="table-card">
+            <h3>owners</h3>
+            <ul>
+              <li><code>id</code></li>
+              <li><code>name</code></li>
+              <li><code>primary_admin_id</code></li>
+              <li><code>billing_scope</code></li>
+            </ul>
+          </div>
+          <div class="table-card">
+            <h3>admins</h3>
+            <ul>
+              <li><code>id</code></li>
+              <li><code>owner_id</code></li>
+              <li><code>email</code></li>
+              <li><code>role</code></li>
+            </ul>
+          </div>
+          <div class="table-card">
+            <h3>end_users</h3>
+            <ul>
+              <li><code>id</code></li>
+              <li><code>owner_id</code></li>
+              <li><code>email</code></li>
+              <li><code>display_name</code></li>
+            </ul>
+          </div>
+          <div class="table-card">
+            <h3>assistants</h3>
+            <ul>
+              <li><code>id</code></li>
+              <li><code>end_user_id</code></li>
+              <li><code>inbound_address</code></li>
+              <li><code>policy_id</code></li>
+            </ul>
+          </div>
+          <div class="table-card">
+            <h3>assistant_scopes</h3>
+            <ul>
+              <li><code>assistant_id</code></li>
+              <li><code>memory_namespace</code></li>
+              <li><code>tool_allowlist</code></li>
+              <li><code>budget_id</code></li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout">
+          First deployment decision: you are the admin/operator, your mum is the regular end user,
+          and her assistant gets its own inbound email address. Adding your own assistant later should be
+          a data/config change, not a second deployment.
+        </div>
+      </section>
+
+      <div id="threading" class="sec-head">03 — Email Threading Model</div>
+      <section class="panel">
+        <div class="sequence">
+          <div class="lane" style="--i: 7">
+            <h3>User sends email</h3>
+            <p>Inbound message creates a new internal thread if no existing message headers match.</p>
+            <div class="when"><code>Message-ID: U1</code></div>
+          </div>
+          <div class="lane" style="--i: 8">
+            <h3>Assistant replies</h3>
+            <p>Outbound message is stored and indexed. The reply includes headers that preserve the conversation chain.</p>
+            <div class="when"><code>Message-ID: A1</code></div>
+          </div>
+          <div class="lane" style="--i: 9">
+            <h3>User replies</h3>
+            <p>The next webhook points at the assistant message, so the resolver maps it back to the same thread.</p>
+            <div class="when"><code>In-Reply-To: A1</code></div>
+          </div>
+        </div>
+        <div class="callout">
+          Store and index both inbound and outbound <span class="code">Message-ID</span> values with
+          <span class="code">assistant_id</span>. The same raw header must never be allowed to cross assistant scopes.
+          Each assistant should have a separate inbound address, so routing can stay explicit and inspectable.
+        </div>
+      </section>
+
+      <div id="memory" class="sec-head">04 — Memory Model</div>
+      <section class="stores">
+        <article class="store" style="--i: 10">
+          <span class="tag amber">Session store</span>
+          <h3>Thread history</h3>
+          <p>Fast lookup by assistant and thread ID. Used to answer “what has happened in this conversation?”</p>
+          <ul>
+            <li>full thread history available for inspection</li>
+            <li>inbound emails and assistant replies</li>
+            <li>short tool summaries</li>
+            <li>prompt injection can use a recent window plus an on-demand thread inspection tool</li>
+          </ul>
+        </article>
+        <article class="store" style="--i: 11">
+          <span class="tag sage">Long-term store</span>
+          <h3>Durable facts</h3>
+          <p>Semantic search over extracted facts, preferences, decisions, contacts, and unresolved tasks scoped by assistant.</p>
+          <ul>
+            <li>embedded memory text</li>
+            <li>scope and importance</li>
+            <li>source thread links</li>
+            <li>permissive capture to start, then tighten policy from observed runs</li>
+          </ul>
+        </article>
+        <article class="store" style="--i: 12">
+          <span class="tag teal">Trace store</span>
+          <h3>Audit trail</h3>
+          <p>Structured record of what the agent did so later runs can inspect outcomes without replaying logs.</p>
+          <ul>
+            <li>tool calls</li>
+            <li>status and errors</li>
+            <li>reply metadata</li>
+          </ul>
+        </article>
+      </section>
+
+      <div id="storage" class="sec-head">05 — Minimal Storage Shape</div>
+      <section class="panel">
+        <div class="schema">
+          <div class="table-card">
+            <h3>email_threads</h3>
+            <ul>
+              <li><code>id</code></li>
+              <li><code>assistant_id</code></li>
+              <li><code>end_user_id</code></li>
+              <li><code>root_message_id</code></li>
+              <li><code>subject_normalized</code></li>
+            </ul>
+          </div>
+          <div class="table-card">
+            <h3>email_messages</h3>
+            <ul>
+              <li><code>thread_id</code></li>
+              <li><code>assistant_id</code></li>
+              <li><code>direction</code></li>
+              <li><code>message_id_header</code></li>
+              <li><code>body_text</code></li>
+            </ul>
+          </div>
+          <div class="table-card">
+            <h3>message_index</h3>
+            <ul>
+              <li><code>message_id_header</code></li>
+              <li><code>assistant_id</code></li>
+              <li><code>thread_id</code></li>
+              <li><code>provider_message_id</code></li>
+            </ul>
+          </div>
+          <div class="table-card">
+            <h3>memories</h3>
+            <ul>
+              <li><code>assistant_id</code></li>
+              <li><code>text</code></li>
+              <li><code>embedding</code></li>
+              <li><code>metadata</code></li>
+            </ul>
+          </div>
+        </div>
+        <div class="schema" style="margin-top: 12px;">
+          <div class="table-card">
+            <h3>agent_runs</h3>
+            <ul>
+              <li><code>id</code></li>
+              <li><code>assistant_id</code></li>
+              <li><code>thread_id</code></li>
+              <li><code>status</code></li>
+              <li><code>reply_message_id</code></li>
+            </ul>
+          </div>
+          <div class="table-card">
+            <h3>run_steps</h3>
+            <ul>
+              <li><code>run_id</code></li>
+              <li><code>kind</code></li>
+              <li><code>input_summary</code></li>
+              <li><code>output_summary</code></li>
+            </ul>
+          </div>
+          <div class="table-card">
+            <h3>usage_ledger</h3>
+            <ul>
+              <li><code>assistant_id</code></li>
+              <li><code>run_id</code></li>
+              <li><code>cost_cents</code></li>
+              <li><code>budget_period</code></li>
+            </ul>
+          </div>
+          <div class="table-card">
+            <h3>budgets</h3>
+            <ul>
+              <li><code>id</code></li>
+              <li><code>assistant_id</code></li>
+              <li><code>monthly_limit_cents</code></li>
+              <li><code>period_resets_at</code></li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <div id="admin" class="sec-head">06 — Admin Interface</div>
+      <section class="grid-2">
+        <article class="decision" style="--i: 13">
+          <h3>Operator dashboard</h3>
+          <p>You get a web UI; your mum only uses email. The dashboard should show recent runs, replies, failures, memory writes, and cost.</p>
+          <ul>
+            <li>filter by assistant, thread, date, status, and cost</li>
+            <li>inspect inbound email, retrieved memory, tools used, and outbound reply</li>
+            <li>pause an assistant or put it into approval-required mode</li>
+          </ul>
+        </article>
+        <article class="decision" style="--i: 14">
+          <h3>Human approval mode</h3>
+          <p>For higher-risk actions, the assistant can draft but not send until you approve from the admin UI.</p>
+          <ul>
+            <li>useful during early rollout</li>
+            <li>can be enabled per assistant or per tool</li>
+            <li>keeps the end-user experience simple</li>
+          </ul>
+        </article>
+      </section>
+
+      <div id="cost" class="sec-head">07 — Cost and Safety Controls</div>
+      <section class="grid-2">
+        <article class="decision" style="--i: 15">
+          <h3>Budget gate before agent run</h3>
+          <p>Every inbound email checks the assistant's daily and monthly budget before calling agent models or tools.</p>
+          <ul>
+            <li>hard stop when limit is reached</li>
+            <li>fallback reply uses a cheap template, not another model call: “I’ve hit my budget limit for this month; it resets in X days.”</li>
+            <li>admin notification when spend crosses thresholds</li>
+          </ul>
+        </article>
+        <article class="decision" style="--i: 16">
+          <h3>Usage ledger</h3>
+          <p>Record estimated and actual cost per run so the admin UI can explain where spend came from.</p>
+          <ul>
+            <li>model tokens and model cost</li>
+            <li>tool/API calls and external cost</li>
+            <li>memory extraction and embedding cost</li>
+          </ul>
+        </article>
+      </section>
+
+      <div id="email-port" class="sec-head">08 — Email Provider Port Decision</div>
+      <section class="panel">
+        <div class="grid-2">
+          <article class="decision" style="--i: 17">
+            <h3>Define email as a port</h3>
+            <p>
+              Runtime code should depend on normalized inbound/outbound email types, not directly on
+              Mailgun payload fields, signatures, webhooks, or send parameters.
+            </p>
+            <ul>
+              <li><strong>Interface:</strong> verify webhook, parse inbound email, send reply, expose provider message IDs.</li>
+              <li><strong>Invariant:</strong> normalized emails must preserve <span class="code">Message-ID</span>, <span class="code">In-Reply-To</span>, and <span class="code">References</span>.</li>
+              <li><strong>Error mode:</strong> provider send failures create retryable run failures visible in admin.</li>
+            </ul>
+          </article>
+          <article class="decision" style="--i: 18">
+            <h3>Mailgun adapter</h3>
+            <p>
+              The first adapter can use Mailgun for inbound webhooks and outbound replies, while hiding
+              Mailgun-specific field names and signature verification from the assistant runtime.
+            </p>
+            <ul>
+              <li>fastest route for the first deployment</li>
+              <li>keeps provider-specific parsing localized</li>
+              <li>lets a future SES/Postmark/Graph adapter satisfy the same interface</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <div id="memory-port" class="sec-head">09 — Memory Port Decision</div>
+      <section class="panel">
+        <div class="grid-2">
+          <article class="decision" style="--i: 19">
+            <h3>Define memory as a port</h3>
+            <p>
+              Agent and webhook code should depend on a small memory interface, not directly on Cognee,
+              pgvector, prompts, or a custom schema. Cognee can be one adapter behind that seam.
+            </p>
+            <ul>
+              <li><strong>Interface:</strong> recall context, record run, curate durable memories, delete/export assistant memory.</li>
+              <li><strong>Invariant:</strong> every operation receives <span class="code">assistant_id</span> and cannot cross assistant scope.</li>
+              <li><strong>Error mode:</strong> recall failures degrade the run; record failures enqueue retry work after the reply is sent.</li>
+            </ul>
+          </article>
+          <article class="decision" style="--i: 20">
+            <h3>Cognee adapter</h3>
+            <p>
+              Uses Cognee for graph/vector memory, session-style recall, and memory enrichment.
+              Best when we want off-the-shelf memory behavior quickly.
+            </p>
+            <ul>
+              <li>more capability up front</li>
+              <li>less local memory code</li>
+              <li>extra dependency, operational complexity, and adapter mapping work</li>
+            </ul>
+          </article>
+          <article class="decision" style="--i: 21">
+            <h3>Minimal local adapter</h3>
+            <p>
+              Uses our own tables, embeddings, and memory extraction prompt. Best when predictability,
+              inspectability, and cost control matter more than graph features.
+            </p>
+            <ul>
+              <li>simple to inspect and debug in the admin UI</li>
+              <li>direct control over retention and budgets</li>
+              <li>we own more retrieval and memory-curation behavior</li>
+            </ul>
+          </article>
+          <article class="decision" style="--i: 22">
+            <h3>Recommendation</h3>
+            <p>
+              Keep the port either way. For the first version, choose the adapter based on the fastest route
+              to a trustworthy admin experience, not on theoretical memory sophistication.
+            </p>
+            <ul>
+              <li>start with one adapter, but design the seam as real because a test adapter is also needed</li>
+              <li>write behavior tests at the memory port, not against Cognee internals</li>
+              <li>avoid leaking Cognee terms into assistant runtime code</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <div id="decisions" class="sec-head">10 — Design Decisions</div>
+      <section class="grid-2">
+        <article class="decision" style="--i: 23">
+          <h3>Send first, enrich after</h3>
+          <p>The reply should not wait for summarization, embeddings, or durable memory extraction unless the same run needs the new memory immediately.</p>
+          <ul>
+            <li>lower perceived latency</li>
+            <li>fewer user-visible failures</li>
+            <li>requires background job retry handling</li>
+          </ul>
+        </article>
+        <article class="decision" style="--i: 24">
+          <h3>Extract memories, do not embed everything</h3>
+          <p>Raw emails stay in thread history. Long-term memory can start permissive, then tighten once real runs show what creates noise.</p>
+          <ul>
+            <li>early version stores broad facts, preferences, tasks, decisions, and useful context</li>
+            <li>admin review can delete or demote bad memories</li>
+            <li>policy becomes stricter after observing actual email patterns</li>
+          </ul>
+        </article>
+        <article class="decision" style="--i: 25">
+          <h3>Own the thread resolver</h3>
+          <p>The email provider handles delivery, but the app owns the durable mapping from message headers to internal thread sessions.</p>
+          <ul>
+            <li>portable across providers</li>
+            <li>supports outbound indexing</li>
+            <li>needs idempotency keys for retries</li>
+          </ul>
+        </article>
+        <article class="decision" style="--i: 26">
+          <h3>Keep trace separate from memory</h3>
+          <p>Traces are useful for audit and debugging, but only selected trace summaries should become long-term memory.</p>
+          <ul>
+            <li>clearer operational logs</li>
+            <li>better privacy controls</li>
+            <li>easier deletion by assistant, end user, or thread</li>
+          </ul>
+        </article>
+      </section>
+
+      <div id="deepening" class="sec-head">11 — Deepening Opportunities</div>
+      <section class="grid-2">
+        <article class="decision" style="--i: 27">
+          <h3>Assistant router module</h3>
+          <p>
+            Give callers one interface: resolve a normalized inbound email into an assistant run scope.
+            Hide recipient routing, assistant config, tool allowlists, budget IDs, and disabled/paused states.
+          </p>
+          <ul>
+            <li><strong>Leverage:</strong> every webhook path starts with the same isolation decision.</li>
+            <li><strong>Locality:</strong> multi-assistant routing bugs live in one module.</li>
+            <li><strong>Test surface:</strong> normalized inbound email in, assistant scope or rejection out.</li>
+          </ul>
+        </article>
+        <article class="decision" style="--i: 28">
+          <h3>Thread resolution module</h3>
+          <p>
+            Give callers one interface: resolve a normalized inbound email and assistant scope into an internal thread.
+            Hide provider IDs, header normalization, outbound message indexing, fallback creation, and idempotency behind it.
+          </p>
+          <ul>
+            <li><strong>Leverage:</strong> every webhook path gets the same threading behavior.</li>
+            <li><strong>Locality:</strong> reply-chain bugs live in one module instead of every handler.</li>
+            <li><strong>Test surface:</strong> header fixtures in, thread decision out.</li>
+          </ul>
+        </article>
+        <article class="decision" style="--i: 29">
+          <h3>Run recorder module</h3>
+          <p>
+            Instead of manually writing inbound email, outbound reply, trace rows, and memory jobs from the handler,
+            expose one “record completed run” interface.
+          </p>
+          <ul>
+            <li><strong>Leverage:</strong> one call persists the full operational record.</li>
+            <li><strong>Locality:</strong> retry, dedupe, and partial-write behavior sit together.</li>
+            <li><strong>Test surface:</strong> completed run in, expected durable writes/jobs out.</li>
+          </ul>
+        </article>
+        <article class="decision" style="--i: 30">
+          <h3>Memory curator module</h3>
+          <p>
+            Make durable memory extraction a module with a small interface: transcript in, accepted memories out.
+            Keep extraction prompts, filtering, importance scoring, and embedding writes inside.
+          </p>
+          <ul>
+            <li><strong>Leverage:</strong> cleaner recall without every caller learning memory policy.</li>
+            <li><strong>Locality:</strong> privacy and retention rules are concentrated.</li>
+            <li><strong>Test surface:</strong> transcript cases assert accepted/rejected memories.</li>
+          </ul>
+        </article>
+        <article class="decision" style="--i: 31">
+          <h3>Reply envelope module</h3>
+          <p>
+            Build outbound subject, recipients, <span class="code">In-Reply-To</span>,
+            <span class="code">References</span>, and generated <span class="code">Message-ID</span>
+            in one place.
+          </p>
+          <ul>
+            <li><strong>Leverage:</strong> correct email threading for every outbound reply.</li>
+            <li><strong>Locality:</strong> provider quirks and RFC-ish header rules do not leak into agent code.</li>
+            <li><strong>Test surface:</strong> normalized inbound email in, normalized outbound reply out.</li>
+          </ul>
+        </article>
+        <article class="decision" style="--i: 32">
+          <h3>Budget governor module</h3>
+          <p>
+            Expose one decision interface for cost control: given an assistant and planned run,
+            allow, degrade, require approval, or send the budget-limit reply.
+          </p>
+          <ul>
+              <li><strong>Leverage:</strong> all model/tool calls share the same spend policy.</li>
+              <li><strong>Locality:</strong> cost limits, reset dates, thresholds, and fallback copy sit together.</li>
+              <li><strong>Test surface:</strong> ledger state plus run estimate in, decision out.</li>
+          </ul>
+        </article>
+      </section>
+
+      <div id="review" class="sec-head">12 — Review Questions</div>
+      <section class="panel review-note">
+        <div class="grid-2">
+          <div>
+            <h3>Decisions captured</h3>
+            <ul>
+              <li>You are the admin/operator; your mum is the regular end user.</li>
+              <li>Each assistant gets a separate inbound email address.</li>
+              <li>Budget limit behavior is an explanatory reply with days until reset.</li>
+              <li>The agent can inspect the full thread and memory; prompt injection should start with a recent window plus on-demand inspection tools.</li>
+              <li>Durable memory capture can be permissive for the first version.</li>
+              <li>Email provider should sit behind a port; Mailgun is the first adapter.</li>
+              <li>Memory should sit behind a port so Cognee and a local adapter can be swapped.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Next implementation slice</h3>
+            <ul>
+              <li>Email provider port with Mailgun adapter</li>
+              <li>Assistant router and budget gate</li>
+              <li>Thread resolver plus message index</li>
+              <li>Admin run ledger and cost dashboard</li>
+              <li>Memory port with either Cognee or a minimal local adapter</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      const toc = document.getElementById("toc");
+      const links = Array.from(toc.querySelectorAll("a"));
+      const sections = links.map((link) => {
+        const id = link.getAttribute("href").slice(1);
+        return { link, el: document.getElementById(id) };
+      }).filter((item) => item.el);
+
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          links.forEach((link) => link.classList.remove("active"));
+          const match = sections.find((item) => item.el === entry.target);
+          if (match) match.link.classList.add("active");
+        });
+      }, { rootMargin: "-15% 0px -70% 0px", threshold: 0.01 });
+
+      sections.forEach((item) => observer.observe(item.el));
+    })();
+  </script>
+</body>
+</html>
