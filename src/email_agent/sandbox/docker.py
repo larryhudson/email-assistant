@@ -5,7 +5,7 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
-from email_agent.models.sandbox import ProjectedFile
+from email_agent.models.sandbox import ProjectedFile, ToolCall, ToolResult
 
 if TYPE_CHECKING:
     from docker.models.containers import Container
@@ -115,6 +115,26 @@ class DockerSandbox:
         container.exec_run(["mkdir", "-p", run_root])
         if files:
             self._put_files(container, root=run_root, files=files)
+
+    async def run_tool(self, assistant_id: str, run_id: str, call: ToolCall) -> ToolResult:
+        return await asyncio.to_thread(self._run_tool_sync, assistant_id, run_id, call)
+
+    def _run_tool_sync(self, assistant_id: str, run_id: str, call: ToolCall) -> ToolResult:
+        container = self._container(assistant_id)
+        if call.kind == "read":
+            assert call.path is not None
+            absolute = self._resolve_workspace_path(call.path)
+            code, output = container.exec_run(["cat", absolute], demux=False)
+            if code != 0:
+                return ToolResult(ok=False, error=output.decode("utf-8", errors="replace"))
+            return ToolResult(ok=True, output=output.decode("utf-8"))
+        raise NotImplementedError(f"run_tool: {call.kind} lands in a later task")
+
+    @staticmethod
+    def _resolve_workspace_path(path: str) -> str:
+        if path.startswith("/"):
+            return path
+        return f"{WORKSPACE_ROOT}/{path}"
 
     @staticmethod
     def _put_files(container: "Container", *, root: str, files: list[ProjectedFile]) -> None:
