@@ -148,3 +148,28 @@ def test_wipes_stale_run_dir_before_regenerating(tmp_path: Path) -> None:
 
     assert not stale_dir.exists()
     assert not (run_dir / "emails" / "dead-thread").exists()
+
+
+def test_sanitizes_complicated_sender_and_quotes_subject(tmp_path: Path) -> None:
+    projector = EmailWorkspaceProjector(run_inputs_root=tmp_path / "run_inputs")
+    result = projector.project(
+        run_id="r-1",
+        thread=_thread(),
+        messages=[
+            _msg(
+                id="m-1",
+                from_email="Mum O'Connor <Mum.O'Connor@example.CO.UK>",
+                subject='Re: a/b "thing": status',
+            )
+        ],
+        attachments=[],
+        current_message_id="m-1",
+    )
+
+    assert result.current_message_path.endswith(
+        "0001-2026-05-10-from-mum-o-connor-mum-o-connor-at-example-co-uk.md"
+    )
+    body = (
+        result.emails_dir / "0001-2026-05-10-from-mum-o-connor-mum-o-connor-at-example-co-uk.md"
+    ).read_text()
+    assert 'subject: "Re: a/b \\"thing\\": status"' in body
