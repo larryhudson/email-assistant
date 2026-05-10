@@ -13,7 +13,7 @@ def test_settings_loads_required_fields(monkeypatch):
     monkeypatch.setenv("MAILGUN_API_KEY", "api")
     monkeypatch.setenv("MAILGUN_DOMAIN", "mg.example.com")
     monkeypatch.setenv("MAILGUN_WEBHOOK_URL", "https://example.com/hook")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "dsk")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw")
     monkeypatch.setenv("COGNEE_LLM_API_KEY", "cog-llm")
     monkeypatch.setenv("COGNEE_EMBEDDING_API_KEY", "cog-emb")
 

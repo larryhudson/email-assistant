@@ -35,7 +35,7 @@ def inject_email(
     use_real_model: bool = typer.Option(
         True,
         "--real-model/--no-real-model",
-        help="Wire DeepSeek (requires DEEPSEEK_API_KEY). Disable to fail fast without an API key.",
+        help="Wire Fireworks (requires FIREWORKS_API_KEY). Disable to fail fast without an API key.",
     ),
 ) -> None:
     """Inject a `.eml` fixture into the runtime — fixture-driven local dev.

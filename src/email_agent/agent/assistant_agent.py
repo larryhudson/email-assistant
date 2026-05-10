@@ -34,7 +34,7 @@ class AssistantAgent:
     def _build_agent(self, scope: AssistantScope) -> Agent[AgentDeps, str]:
         # Default model is a TestModel placeholder; production callers should
         # invoke `override_model(scope, real_model)` before `run`. Real model
-        # wiring (DeepSeek via OpenAI-compatible provider) lands when the
+        # wiring (Fireworks via OpenAI-compatible provider) lands when the
         # runtime composes things in slice 5's later tasks.
         agent: Agent[AgentDeps, str] = Agent(
             model=TestModel(),
@@ -136,7 +136,7 @@ class AssistantAgent:
 
         Wraps PydanticAI's `Agent.override(model=...)` so callers don't need
         to know about the cache key. Used by tests with `TestModel` /
-        `FunctionModel` and by the runtime when wiring DeepSeek.
+        `FunctionModel` and by the runtime when wiring Fireworks.
         """
         agent = self._agent_for(scope)
         with agent.override(model=model):

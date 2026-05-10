@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     mailgun_domain: str
     mailgun_webhook_url: HttpUrl
 
-    deepseek_api_key: SecretStr
-    deepseek_base_url: HttpUrl = HttpUrl("https://api.deepseek.com/v1")
+    fireworks_api_key: SecretStr
+    fireworks_model_id: str = "accounts/fireworks/models/minimax-m2p7"
 
     cognee_llm_api_key: SecretStr
     cognee_embedding_api_key: SecretStr
