@@ -50,6 +50,26 @@ def make_fireworks_model_factory(
     return factory
 
 
+def make_cognee_memory(settings: Settings) -> "MemoryPort":
+    """Build a `CogneeMemoryAdapter` rooted at `settings.cognee_data_root`.
+
+    Cognee's LLM + embedding api keys are module-global; we set them once
+    here so every adapter call can rely on them. The per-assistant
+    `data_root_directory` / `system_root_directory` are switched under the
+    adapter's lock per call (see `CogneeMemoryAdapter`).
+    """
+    import cognee
+
+    from email_agent.memory.cognee import CogneeMemoryAdapter
+
+    cognee.config.set_llm_api_key(settings.cognee_llm_api_key.get_secret_value())
+    cognee.config.set_embedding_api_key(settings.cognee_embedding_api_key.get_secret_value())
+    cognee.config.set_embedding_model(settings.cognee_embedding_model)
+
+    settings.cognee_data_root.mkdir(parents=True, exist_ok=True)
+    return CogneeMemoryAdapter(data_root=settings.cognee_data_root)
+
+
 def make_docker_sandbox(settings: Settings) -> "AssistantSandbox":
     """Build a DockerSandbox from Settings.
 
@@ -79,6 +99,7 @@ def make_runtime_from_settings(
     sandbox: "AssistantSandbox | None" = None,
     memory: "MemoryPort | None" = None,
     use_real_model: bool = True,
+    use_real_memory: bool = True,
     use_docker_sandbox: bool = True,
     run_timeout_seconds: float | None = None,
 ) -> AssistantRuntime:
@@ -86,15 +107,18 @@ def make_runtime_from_settings(
 
     `sandbox` defaults to a `DockerSandbox` (`use_docker_sandbox=True`),
     falling back to `InMemorySandbox` when the toggle is off — useful for
-    quick iteration without docker. `memory` defaults to
-    `InMemoryMemoryAdapter`; the real Cognee adapter lands in slice 6.
-    `use_real_model=False` skips wiring Fireworks so callers can rely on
-    a test override; `use_real_model=True` (default) plumbs through
+    quick iteration without docker. `memory` defaults to a
+    `CogneeMemoryAdapter` (`use_real_memory=True`), falling back to
+    `InMemoryMemoryAdapter` when the toggle is off — useful for offline
+    iteration without an embedding API key. `use_real_model=False` skips
+    wiring Fireworks so callers can rely on a test override;
+    `use_real_model=True` (default) plumbs through
     `make_fireworks_model_factory(settings)`.
     """
     if sandbox is None:
         sandbox = make_docker_sandbox(settings) if use_docker_sandbox else InMemorySandbox()
-    memory = memory or InMemoryMemoryAdapter()
+    if memory is None:
+        memory = make_cognee_memory(settings) if use_real_memory else InMemoryMemoryAdapter()
     projector = EmailWorkspaceProjector(run_inputs_root=settings.run_inputs_root)
 
     settings.attachments_root.mkdir(parents=True, exist_ok=True)
@@ -120,6 +144,7 @@ def make_runtime_for_inject(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     use_real_model: bool = True,
+    use_real_memory: bool = True,
     use_docker_sandbox: bool = True,
 ) -> tuple[AssistantRuntime, "EmailProvider"]:
     """Build a runtime suitable for `inject-email --follow`.
@@ -136,6 +161,7 @@ def make_runtime_for_inject(
         session_factory,
         email_provider=email_provider,
         use_real_model=use_real_model,
+        use_real_memory=use_real_memory,
         use_docker_sandbox=use_docker_sandbox,
         run_timeout_seconds=settings.sandbox_run_timeout_seconds,
     )
@@ -143,6 +169,7 @@ def make_runtime_for_inject(
 
 
 __all__ = [
+    "make_cognee_memory",
     "make_docker_sandbox",
     "make_fireworks_model_factory",
     "make_runtime_for_inject",
