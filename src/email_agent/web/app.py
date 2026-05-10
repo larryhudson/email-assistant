@@ -17,6 +17,22 @@ from email_agent.runtime.assistant_runtime import (
 log = logging.getLogger(__name__)
 
 
+def build_app_from_settings() -> FastAPI:
+    """Compose the production app from environment-backed settings."""
+    from email_agent.config import Settings
+    from email_agent.db.session import make_engine, make_session_factory
+
+    settings = Settings()  # ty: ignore[missing-argument]
+    engine = make_engine(settings)
+    factory = make_session_factory(engine)
+    provider = MailgunEmailProvider(
+        signing_key=settings.mailgun_signing_key.get_secret_value(),
+    )
+    runtime = AssistantRuntime(factory, attachments_root=settings.attachments_root)
+    settings.attachments_root.mkdir(parents=True, exist_ok=True)
+    return build_app(provider=provider, runtime=runtime)
+
+
 def build_app(*, provider: MailgunEmailProvider, runtime: AssistantRuntime) -> FastAPI:
     """Build the FastAPI app with its handler dependencies wired in.
 
