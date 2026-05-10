@@ -119,3 +119,22 @@ def test_projects_thread_messages_and_attachments(tmp_path: Path) -> None:
 
     # current_message_path points at the third message file (sandbox-relative)
     assert result.current_message_path == "emails/t-1/0003-2026-05-10-from-mum-at-example-com.md"
+
+
+def test_wipes_stale_run_dir_before_regenerating(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_inputs" / "r-1"
+    stale_dir = run_dir / "emails" / "dead-thread"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "ghost.md").write_text("should be deleted")
+
+    projector = EmailWorkspaceProjector(run_inputs_root=tmp_path / "run_inputs")
+    projector.project(
+        run_id="r-1",
+        thread=_thread(),
+        messages=[_msg()],
+        attachments=[],
+        current_message_id="m-1",
+    )
+
+    assert not stale_dir.exists()
+    assert not (run_dir / "emails" / "dead-thread").exists()
