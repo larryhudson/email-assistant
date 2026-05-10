@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import cognee
+from cognee.modules.search.types import SearchType
 
 from email_agent.models.memory import Memory, MemoryContext
 
@@ -44,8 +45,17 @@ class CogneeMemoryAdapter:
             await cognee.remember(text, session_id=thread_id)
 
     async def recall(self, assistant_id: str, thread_id: str, query: str) -> MemoryContext:
+        # We want raw retrieved chunks injected into the agent's prompt — NOT
+        # cognee's LLM-synthesized answer. `query_type=CHUNKS` returns the
+        # actual ingested text segments; `only_context=True` is redundant for
+        # CHUNKS but kept as a safety belt against future API drift.
         async with self._scope(assistant_id):
-            results = await cognee.recall(query, session_id=thread_id)
+            results = await cognee.recall(
+                query,
+                session_id=thread_id,
+                query_type=SearchType.CHUNKS,
+                only_context=True,
+            )
         return MemoryContext(
             memories=[self._to_memory(r) for r in results],
             retrieved_at=datetime.now(UTC),
@@ -53,7 +63,11 @@ class CogneeMemoryAdapter:
 
     async def search(self, assistant_id: str, query: str) -> list[Memory]:
         async with self._scope(assistant_id):
-            results = await cognee.recall(query)
+            results = await cognee.recall(
+                query,
+                query_type=SearchType.CHUNKS,
+                only_context=True,
+            )
         return [self._to_memory(r) for r in results]
 
     async def seed_durable(self, assistant_id: str, content: str) -> None:
@@ -79,9 +93,11 @@ class CogneeMemoryAdapter:
     def _assistant_root(self, assistant_id: str) -> Path:
         return self._data_root / assistant_id
 
-    def _to_memory(self, raw: Any) -> Memory:
-        content = raw if isinstance(raw, str) else getattr(raw, "content", str(raw))
-        return Memory(id=f"mem-{next(self._counter)}", content=content)
+    def _to_memory(self, raw: dict[str, Any]) -> Memory:
+        # cognee.recall(query_type=CHUNKS, only_context=True) returns dicts of
+        # shape {dataset_id, dataset_name, dataset_tenant_id, search_result, _source}.
+        # `search_result` is the raw chunk text we want to inject into the prompt.
+        return Memory(id=f"mem-{next(self._counter)}", content=raw["search_result"])
 
 
 class _AssistantScope:

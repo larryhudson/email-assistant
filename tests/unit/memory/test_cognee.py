@@ -34,19 +34,24 @@ class _FakeConfig:
 
 
 class _FakeCognee:
-    """Records the config state observed at the moment of each call."""
+    """Records the config state observed at the moment of each call.
+
+    `recall_returns` should be a list of dicts of shape
+    `{"search_result": "...", "_source": "graph", ...}` matching cognee's
+    `query_type=CHUNKS, only_context=True` response envelope.
+    """
 
     def __init__(self) -> None:
         self.config = _FakeConfig()
         self.remember_calls: list[tuple[str, str | None, str | None]] = []
-        self.recall_calls: list[tuple[str, str | None, str | None]] = []
-        self.recall_returns: list = []
+        self.recall_calls: list[dict] = []
+        self.recall_returns: list[dict] = []
 
     async def remember(self, text: str, *, session_id: str | None = None) -> None:
         self.remember_calls.append((text, session_id, self.config.data_root))
 
-    async def recall(self, query: str, *, session_id: str | None = None) -> list:
-        self.recall_calls.append((query, session_id, self.config.data_root))
+    async def recall(self, query: str, **kwargs) -> list[dict]:
+        self.recall_calls.append({"query": query, "data_root": self.config.data_root, **kwargs})
         return list(self.recall_returns)
 
 
@@ -79,16 +84,24 @@ async def test_record_turn_swaps_config_before_calling_remember(
 async def test_recall_returns_memory_context_with_per_assistant_root(
     fake_cognee: _FakeCognee, tmp_path: Path
 ) -> None:
-    fake_cognee.recall_returns = ["sourdough is great", "user prefers detail"]
+    from cognee.modules.search.types import SearchType
+
+    fake_cognee.recall_returns = [
+        {"search_result": "sourdough is great", "_source": "graph"},
+        {"search_result": "user prefers detail", "_source": "graph"},
+    ]
     adapter = CogneeMemoryAdapter(data_root=tmp_path)
 
     ctx = await adapter.recall("a-2", "t-9", "what about sourdough")
 
     assert len(fake_cognee.recall_calls) == 1
-    query, session_id, observed_root = fake_cognee.recall_calls[0]
-    assert query == "what about sourdough"
-    assert session_id == "t-9"
-    assert observed_root == str((tmp_path / "a-2" / "data").resolve())
+    call = fake_cognee.recall_calls[0]
+    assert call["query"] == "what about sourdough"
+    assert call["session_id"] == "t-9"
+    assert call["data_root"] == str((tmp_path / "a-2" / "data").resolve())
+    # Raw chunks, not LLM-synthesized answers — query_type=CHUNKS, only_context=True
+    assert call["query_type"] == SearchType.CHUNKS
+    assert call["only_context"] is True
     assert {m.content for m in ctx.memories} == {
         "sourdough is great",
         "user prefers detail",
@@ -104,7 +117,7 @@ async def test_concurrent_calls_for_different_assistants_serialize(
 
     overlap = {"max_concurrent": 0, "current": 0}
 
-    async def slow_recall(query: str, *, session_id: str | None = None) -> list:
+    async def slow_recall(query: str, **kwargs) -> list[dict]:
         overlap["current"] += 1
         overlap["max_concurrent"] = max(overlap["max_concurrent"], overlap["current"])
         await asyncio.sleep(0.01)
@@ -125,14 +138,14 @@ async def test_concurrent_calls_for_different_assistants_serialize(
 
 @pytest.mark.asyncio
 async def test_search_passes_no_session_id(fake_cognee: _FakeCognee, tmp_path: Path) -> None:
-    fake_cognee.recall_returns = ["across-thread fact"]
+    fake_cognee.recall_returns = [{"search_result": "across-thread fact", "_source": "graph"}]
     adapter = CogneeMemoryAdapter(data_root=tmp_path)
 
     hits = await adapter.search("a-1", "fact")
 
     assert len(fake_cognee.recall_calls) == 1
-    _, session_id, _ = fake_cognee.recall_calls[0]
-    assert session_id is None
+    call = fake_cognee.recall_calls[0]
+    assert "session_id" not in call
     assert [m.content for m in hits] == ["across-thread fact"]
 
 
