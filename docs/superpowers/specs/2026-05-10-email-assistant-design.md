@@ -363,6 +363,57 @@ No auth in MVP beyond the admin app being only reachable on Larry's network. (Fo
 - Admin notification when spend crosses thresholds (e.g. 70%).
 - Per-run wall-clock timeout (5 min) caps runaway loops independent of token spend.
 
+## Development methodology
+
+**Red-green-refactor TDD throughout.** For each new behaviour:
+
+1. **Red:** write a failing test against the module's interface. The test must fail for the right reason — run it and read the failure before writing implementation.
+2. **Green:** write the smallest implementation that makes the test pass. No extra features, no anticipatory abstractions.
+3. **Refactor:** improve the structure with the test as a safety net. Tests stay green.
+
+Constraints:
+
+- **Tests live at the module interface, not at adapter internals.** If a test only passes for the Cognee adapter, it belongs as an adapter-specific test, not a memory-port test.
+- **One failing test at a time.** Don't write a batch of tests then implement. Each test → implementation → refactor cycle is a single commit's worth of progress (commit per cycle is fine but not required).
+- **The failure message is part of the test.** A green test that would have stayed green if you deleted the implementation is no test.
+- **Refactor with intent.** Don't refactor in the same step as adding behaviour. After green, decide whether the design needs help; if yes, refactor; if no, move to the next test.
+- **Adapters use real dependencies in integration tests** (real Postgres, real docker, real Cognee with a tmp data root) — not mocks. The whole point of the port seam is that you can write the contract test once and reuse it for all adapters.
+
+Implementation slice work proceeds slice-by-slice in TDD. Each slice has its own failing-test-first list before any implementation begins; the implementation plan (next document) will spell those out.
+
+## Feedback loops
+
+The build → test → improve loop is the project's most important deliverable beyond the assistant itself. Speed targets:
+
+| Loop | Target | Trigger |
+| --- | --- | --- |
+| Module unit tests | < 2s | `pytest -k <module>` on save |
+| Agent behaviour | ~30s | `inject-email --follow` |
+| Replay run with tweaked config | seconds–minute | `rerun <run-id> --model … --system-prompt …` |
+| Eval over fixture corpus | minutes | `email-assistant eval` |
+| Sandbox debugging | instant | `sandbox shell <assistant-id>` |
+| Production observability | real-time | admin run trace view + JSON logs |
+
+### Investments baked into the build
+
+1. **`inject-email --follow`.** Beyond the basic inject command, `--follow` waits for the resulting `run_agent` job to complete and prints the rendered reply, full tool trace, model token usage, and cost summary inline. Eliminates the admin UI round-trip during prompt iteration.
+
+2. **`email-assistant rerun <run-id>` command** with `--model`, `--system-prompt <path>`, and `--memory-isolated` flags. Re-executes the captured inbound against an alternative config. Critical for iterating prompts against a real interaction.  `--memory-isolated` runs against a tmp Cognee root so durable memory doesn't pollute the comparison.
+
+3. **PydanticAI `TestModel` for agent unit tests.** PydanticAI ships `TestModel` (and `FunctionModel`) for scripting tool-call sequences without an API key. All unit tests of the agent loop and tool dispatch use this. Sub-second, deterministic.
+
+4. **Eval CLI.** `email-assistant eval [--corpus path]` walks `tests/fixtures/scenarios/<name>/`, each containing `inbound.eml` and `assertions.yaml` (e.g. `reply_contains: "..."`, `tools_called: [bash, memory_search]`, `cost_under_cents: 5`). Prints a per-scenario pass/fail table with token usage. Failed scenarios become regression fixtures.
+
+5. **Admin run trace view.** Single page showing the full picture: rendered prompt sent to the model (with memory recall context inlined), every tool call + output, the model's final response, per-step token usage and cost, latency per step. Available as both HTML and JSON (`/admin/runs/<id>.json`).
+
+6. **`email-assistant sandbox shell <assistant-id>`.** Wraps `docker exec -it … bash`. Drops the operator into the assistant's actual workspace for hand debugging.
+
+7. **Structured logs with `run_id` propagation.** stdlib `logging` configured with a JSON formatter; `run_id` and `assistant_id` propagated via `contextvars`. `jq 'select(.run_id == "abc")' logs.jsonl` recovers a full trace from logs alone.
+
+8. **Reload knobs.** `uvicorn --reload` for web. Worker auto-restart via `watchfiles` (`watchfiles "python -m email_assistant.worker" src/`). Config watch for assistant rows: a row update via CLI invalidates the in-process `Agent` cache so the next run picks up the new system prompt without restart.
+
+9. **Fixture-driven offline path is the default for dev.** Real Mailgun deliveries are only used when actively testing the Mailgun adapter itself. All other dev iterates from `tests/fixtures/emails/*.eml`.
+
 ## Testing strategy
 
 Tests are written against module interfaces, not adapter internals.
