@@ -48,8 +48,22 @@ def _configure_cognee_credentials() -> None:
     cognee.config.set_embedding_api_key(os.environ["COGNEE_EMBEDDING_API_KEY"])
 
 
+def _configure_cognee_data_root(tmp_path: Path) -> None:
+    """Point cognee's single-instance data + system roots at this test's
+    tmp dir so tests don't pollute (or get polluted by) the dev DB."""
+    import cognee
+
+    data_root = (tmp_path / "data").resolve()
+    system_root = (tmp_path / "system").resolve()
+    data_root.mkdir(parents=True, exist_ok=True)
+    system_root.mkdir(parents=True, exist_ok=True)
+    cognee.config.data_root_directory(str(data_root))
+    cognee.config.system_root_directory(str(system_root))
+
+
 async def test_record_then_recall_round_trips(tmp_path: Path) -> None:
-    adapter = CogneeMemoryAdapter(data_root=tmp_path)
+    _configure_cognee_data_root(tmp_path)
+    adapter = CogneeMemoryAdapter()
     await adapter.record_turn("a-1", "t-1", "user", "I love sourdough bread.")
 
     ctx = await adapter.recall("a-1", "t-1", "What bread does the user like?")
@@ -60,7 +74,8 @@ async def test_record_then_recall_round_trips(tmp_path: Path) -> None:
 
 
 async def test_recall_does_not_leak_across_assistants(tmp_path: Path) -> None:
-    adapter = CogneeMemoryAdapter(data_root=tmp_path)
+    _configure_cognee_data_root(tmp_path)
+    adapter = CogneeMemoryAdapter()
     await adapter.record_turn("a-1", "t-1", "user", "secret-alpha is the password.")
     await adapter.record_turn("a-2", "t-1", "user", "secret-beta is the password.")
 
