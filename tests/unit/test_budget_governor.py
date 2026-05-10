@@ -145,3 +145,75 @@ async def test_governor_blocks_when_over_limit(
         spent_cents=1500,
         days_until_reset=1,
     )
+
+
+async def test_governor_ignores_ledger_rows_outside_active_period(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+):
+    # An old, expensive run from a prior period plus a small in-period run.
+    # Total exceeds the cap, but only the in-period row counts → still under.
+    async with sqlite_session_factory() as session:
+        session.add(Owner(id="o-1", name="Larry"))
+        session.add(EndUser(id="u-1", owner_id="o-1", email="mum@example.com"))
+        session.add(
+            Budget(
+                id="b-1",
+                assistant_id="a-1",
+                monthly_limit_cents=1000,
+                period_starts_at=datetime(2026, 5, 1, tzinfo=UTC),
+                period_resets_at=datetime(2026, 6, 1, tzinfo=UTC),
+            )
+        )
+        session.add(
+            Assistant(
+                id="a-1",
+                end_user_id="u-1",
+                inbound_address="mum@assistants.example.com",
+                status="active",
+                allowed_senders=["mum@example.com"],
+                model="deepseek-flash",
+                system_prompt="be kind",
+            )
+        )
+        session.add(
+            AssistantScopeRow(
+                assistant_id="a-1",
+                memory_namespace="mum",
+                tool_allowlist=["read"],
+                budget_id="b-1",
+            )
+        )
+        session.add(
+            UsageLedger(
+                id="l-old",
+                assistant_id="a-1",
+                run_id="r-old",
+                provider="deepseek",
+                model="deepseek-flash",
+                input_tokens=0,
+                output_tokens=0,
+                cost_cents=5000,
+                budget_period="2026-04",
+                created_at=datetime(2026, 4, 15, tzinfo=UTC),
+            )
+        )
+        session.add(
+            UsageLedger(
+                id="l-new",
+                assistant_id="a-1",
+                run_id="r-new",
+                provider="deepseek",
+                model="deepseek-flash",
+                input_tokens=0,
+                output_tokens=0,
+                cost_cents=200,
+                budget_period="2026-05",
+                created_at=datetime(2026, 5, 5, tzinfo=UTC),
+            )
+        )
+        await session.commit()
+
+    governor = BudgetGovernor(sqlite_session_factory)
+    decision = await governor.decide(_scope())
+
+    assert isinstance(decision, Allow)
