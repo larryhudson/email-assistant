@@ -52,12 +52,13 @@ def make_fireworks_model_factory(
 
 
 def make_cognee_memory(settings: Settings) -> "MemoryPort":
-    """Build a `CogneeMemoryAdapter` rooted at `settings.cognee_data_root`.
+    """Build a single shared `CogneeMemoryAdapter`.
 
-    Cognee's LLM + embedding api keys are module-global; we set them once
-    here so every adapter call can rely on them. The per-assistant
-    `data_root_directory` / `system_root_directory` are switched under the
-    adapter's lock per call (see `CogneeMemoryAdapter`).
+    Cognee 1.0 is a single-instance library: one set of relational/vector/
+    graph stores per process, with multi-tenancy modeled via cognee `User`
+    objects. We point the install at `settings.cognee_data_root` once,
+    set the LLM + embedding config, and let the adapter authenticate
+    each call as the right user (per-assistant) via `user=...`.
     """
     import os
 
@@ -81,8 +82,15 @@ def make_cognee_memory(settings: Settings) -> "MemoryPort":
         cognee.config.set_embedding_endpoint(settings.cognee_embedding_endpoint)
     cognee.config.set_embedding_dimensions(settings.cognee_embedding_dimensions)
 
-    settings.cognee_data_root.mkdir(parents=True, exist_ok=True)
-    return CogneeMemoryAdapter(data_root=settings.cognee_data_root)
+    # Cognee builds file:// URIs from data_root_directory and breaks on
+    # relative paths; resolve to absolute up front. system_root holds
+    # cognee's own SQLite/graph DBs; data_root holds ingested files.
+    data_root = settings.cognee_data_root.resolve()
+    data_root.mkdir(parents=True, exist_ok=True)
+    cognee.config.data_root_directory(str(data_root / "data"))
+    cognee.config.system_root_directory(str(data_root / "system"))
+
+    return CogneeMemoryAdapter()
 
 
 def make_docker_sandbox(settings: Settings) -> "AssistantSandbox":
