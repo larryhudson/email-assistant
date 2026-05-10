@@ -20,7 +20,17 @@ def assistant_id() -> str:
 
 
 @pytest.fixture
-async def sandbox(tmp_path: Path, assistant_id: str) -> AsyncIterator["object"]:  # type: ignore[name-defined]
+def bash_timeout_seconds(request) -> int:
+    """Default bash timeout. Override with `@pytest.mark.parametrize(..., indirect=True)`."""
+    return getattr(request, "param", 10)
+
+
+@pytest.fixture
+async def sandbox(
+    tmp_path: Path, assistant_id: str, bash_timeout_seconds: int
+) -> AsyncIterator["object"]:  # type: ignore[name-defined]
+    import contextlib
+
     import docker
     from email_agent.sandbox.docker import DockerSandbox
 
@@ -31,17 +41,13 @@ async def sandbox(tmp_path: Path, assistant_id: str) -> AsyncIterator["object"]:
         sandbox_data_root=tmp_path / "sandboxes",
         memory_mb=512,
         cpu_cores=1.0,
-        bash_timeout_seconds=10,
+        bash_timeout_seconds=bash_timeout_seconds,
     )
     try:
         yield sb
     finally:
-        # Tear down container if it exists.
-        try:
-            container = client.containers.get(f"email-agent-sandbox-{assistant_id}")
-            container.remove(force=True)
-        except docker.errors.NotFound:
-            pass
+        with contextlib.suppress(docker.errors.NotFound):
+            client.containers.get(f"email-agent-sandbox-{assistant_id}").remove(force=True)
 
 
 async def test_ensure_started_creates_running_container(sandbox, assistant_id, tmp_path):
@@ -278,31 +284,12 @@ async def test_run_tool_bash_captures_stdout_exit(sandbox, assistant_id):
     assert "hello" in result.output.stdout
 
 
-async def test_run_tool_bash_times_out(tmp_path, assistant_id):
-    import docker
-    from email_agent.sandbox.docker import DockerSandbox
+@pytest.mark.parametrize("bash_timeout_seconds", [2], indirect=True)
+async def test_run_tool_bash_times_out(sandbox, assistant_id):
+    from email_agent.models.sandbox import ToolCall
 
-    client = docker.from_env()
-    fast_sandbox = DockerSandbox(
-        client=client,
-        image="email-agent-sandbox:slice4",
-        sandbox_data_root=tmp_path / "sandboxes",
-        memory_mb=512,
-        cpu_cores=1.0,
-        bash_timeout_seconds=2,
-    )
-    try:
-        from email_agent.models.sandbox import ToolCall
-
-        await fast_sandbox.ensure_started(assistant_id)
-        result = await fast_sandbox.run_tool(
-            assistant_id, "r-1", ToolCall(kind="bash", command="sleep 30")
-        )
-        assert result.ok is False
-        assert result.error is not None
-        assert "timeout" in result.error.lower() or "timed out" in result.error.lower()
-    finally:
-        import contextlib
-
-        with contextlib.suppress(docker.errors.NotFound):
-            client.containers.get(f"email-agent-sandbox-{assistant_id}").remove(force=True)
+    await sandbox.ensure_started(assistant_id)
+    result = await sandbox.run_tool(assistant_id, "r-1", ToolCall(kind="bash", command="sleep 30"))
+    assert result.ok is False
+    assert result.error is not None
+    assert "timeout" in result.error.lower() or "timed out" in result.error.lower()
