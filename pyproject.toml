@@ -11,6 +11,7 @@ dependencies = [
     "fastapi>=0.136.1",
     "httpx>=0.28.1",
     "pydantic>=2.13.4",
+    "pydantic-ai-slim[openai]>=1.93.0",
     "pydantic-settings>=2.14.1",
     "python-multipart>=0.0.28",
     "sqlalchemy[asyncio]>=2.0.49",
