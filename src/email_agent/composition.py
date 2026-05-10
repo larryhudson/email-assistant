@@ -141,13 +141,19 @@ def make_runtime_from_settings(
 
     model_factory = make_fireworks_model_factory(settings) if use_real_model else None
 
-    # Procrastinate defer is wired in by default; tests / inject-email --follow
-    # disable it (`use_procrastinate=False`) and call execute_run directly.
+    # Procrastinate defers are wired in by default; tests / inject-email --follow
+    # disable them (`use_procrastinate=False`) and call execute_run directly.
     run_agent_defer = None
+    curate_memory_defer = None
     if use_procrastinate:
-        from email_agent.jobs.app import defer_run_agent
+        from email_agent.jobs.app import defer_curate_memory, defer_run_agent
 
         run_agent_defer = defer_run_agent
+        curate_memory_defer = defer_curate_memory
+
+    from email_agent.domain.run_recorder import RunRecorder
+
+    recorder = RunRecorder(session_factory, curate_memory_defer=curate_memory_defer)
 
     return AssistantRuntime(
         session_factory,
@@ -157,6 +163,7 @@ def make_runtime_from_settings(
         memory=memory,
         agent=AssistantAgent(),
         projector=projector,
+        recorder=recorder,
         model_factory=model_factory,
         run_timeout_seconds=run_timeout_seconds,
         run_agent_defer=run_agent_defer,

@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -42,8 +43,14 @@ class RunRecorder:
     (relies on the unique constraint on `email_messages`).
     """
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        curate_memory_defer: Callable[..., Awaitable[None]] | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._curate_memory_defer = curate_memory_defer
 
     async def record_completion(self, completed: CompletedRun) -> None:
         async with self._session_factory() as session:
@@ -63,6 +70,8 @@ class RunRecorder:
             run.completed_at = datetime.now(UTC)
             run.reply_message_id = outbound.id
             run.error = None
+            assistant_id = run.assistant_id
+            thread_id = run.thread_id
 
             for step in completed.steps:
                 session.add(
@@ -91,6 +100,13 @@ class RunRecorder:
             )
 
             await session.commit()
+
+        if self._curate_memory_defer is not None:
+            await self._curate_memory_defer(
+                assistant_id=assistant_id,
+                thread_id=thread_id,
+                run_id=completed.run_id,
+            )
 
     async def record_failure(self, run_id: str, *, error: str) -> None:
         async with self._session_factory() as session:
