@@ -16,6 +16,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from procrastinate import App, PsycopgConnector
+from sqlalchemy.engine.url import make_url
 
 from email_agent.config import Settings
 from email_agent.jobs.curate_memory import curate_memory_impl
@@ -31,8 +32,16 @@ if TYPE_CHECKING:
 def make_procrastinate_app(database_url: str) -> App:
     """Return a Procrastinate app wired to `database_url`. Tasks attach
     via the module-level `app` (see below); this factory exists so tests
-    and alternate configs can construct their own."""
-    return App(connector=PsycopgConnector(conninfo=database_url))
+    and alternate configs can construct their own.
+
+    Accepts the project's standard SQLAlchemy-style URL (with the
+    `+asyncpg` driver suffix). Procrastinate's connector talks to psycopg,
+    not asyncpg, so the suffix is stripped.
+    """
+    psycopg_url = make_url(database_url).set(drivername="postgresql")
+    return App(
+        connector=PsycopgConnector(conninfo=psycopg_url.render_as_string(hide_password=False))
+    )
 
 
 def _settings() -> Settings:
