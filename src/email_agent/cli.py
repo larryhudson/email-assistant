@@ -19,5 +19,23 @@ def migrate() -> None:
     raise typer.Exit(code)
 
 
+@app.command()
+def web(
+    host: str = typer.Option("127.0.0.1", help="Bind host"),
+    port: int = typer.Option(8000, help="Bind port"),
+    reload: bool = typer.Option(False, help="Auto-reload on file changes"),
+) -> None:
+    """Run the FastAPI app (Mailgun webhook + future admin UI)."""
+    import uvicorn
+
+    uvicorn.run(
+        "email_agent.web.app:build_app_from_settings",
+        host=host,
+        port=port,
+        reload=reload,
+        factory=True,
+    )
+
+
 if __name__ == "__main__":
     app()
