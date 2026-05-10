@@ -207,3 +207,73 @@ async def test_memory_search_bypasses_sandbox() -> None:
     assert "kicks off Monday" in result.body
     assert "needs a budget" in result.body
     assert "different topic" not in result.body
+
+
+async def test_attach_file_appends_pending_attachment() -> None:
+    sandbox = InMemorySandbox()
+    memory = InMemoryMemoryAdapter()
+    await sandbox.ensure_started("a-1")
+    from email_agent.models.sandbox import ToolCall as _ToolCall
+
+    await sandbox.run_tool(
+        "a-1",
+        "r-1",
+        _ToolCall(kind="write", path="report.pdf", content="%PDF-1.7"),
+    )
+
+    agent = AssistantAgent()
+    deps = AgentDeps(
+        assistant_id="a-1",
+        run_id="r-1",
+        thread_id="t-1",
+        sandbox=sandbox,
+        memory=memory,
+        pending_attachments=[],
+    )
+
+    with agent.override_model(
+        _scope(),
+        _call_then_echo("attach_file", {"path": "report.pdf", "filename": "renamed.pdf"}),
+    ):
+        await agent.run(_scope(), prompt="please attach", deps=deps)
+
+    from email_agent.models.sandbox import PendingAttachment
+
+    assert deps.pending_attachments == [
+        PendingAttachment(sandbox_path="report.pdf", filename="renamed.pdf")
+    ]
+
+
+async def test_attach_file_defaults_filename_to_basename() -> None:
+    sandbox = InMemorySandbox()
+    memory = InMemoryMemoryAdapter()
+    await sandbox.ensure_started("a-1")
+    from email_agent.models.sandbox import ToolCall as _ToolCall
+
+    await sandbox.run_tool(
+        "a-1",
+        "r-1",
+        _ToolCall(kind="write", path="docs/report.pdf", content="%PDF-1.7"),
+    )
+
+    agent = AssistantAgent()
+    deps = AgentDeps(
+        assistant_id="a-1",
+        run_id="r-1",
+        thread_id="t-1",
+        sandbox=sandbox,
+        memory=memory,
+        pending_attachments=[],
+    )
+
+    with agent.override_model(
+        _scope(),
+        _call_then_echo("attach_file", {"path": "docs/report.pdf"}),
+    ):
+        await agent.run(_scope(), prompt="please attach", deps=deps)
+
+    from email_agent.models.sandbox import PendingAttachment
+
+    assert deps.pending_attachments == [
+        PendingAttachment(sandbox_path="docs/report.pdf", filename="report.pdf")
+    ]
