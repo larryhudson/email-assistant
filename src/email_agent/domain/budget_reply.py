@@ -1,6 +1,7 @@
 from collections.abc import Callable
 
 from email_agent.domain.budget_governor import BudgetLimitReply
+from email_agent.domain.reply_envelope import ReplyEnvelopeBuilder
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.email import NormalizedInboundEmail, NormalizedOutboundEmail
 
@@ -14,9 +15,8 @@ def build_budget_limit_reply(
 ) -> NormalizedOutboundEmail:
     """Build the cheap canned reply sent when an assistant hits its monthly cap.
 
-    No model call. Threading headers chain off the inbound so the recipient's
-    mail client groups it. Slice 5's `ReplyEnvelopeBuilder` will share the
-    same subject + `References` rules.
+    No model call. Threading headers chain off the inbound via
+    `ReplyEnvelopeBuilder`; only the body is custom here.
     """
     days = decision.days_until_reset
     day_word = "day" if days == 1 else "days"
@@ -28,23 +28,13 @@ def build_budget_limit_reply(
         f"It will be back automatically when the next billing period starts.\n"
     )
 
-    references = [*inbound.references_headers, inbound.message_id_header]
-
-    return NormalizedOutboundEmail(
+    return ReplyEnvelopeBuilder().build(
+        inbound=inbound,
         from_email=scope.inbound_address,
-        to_emails=[inbound.from_email],
-        subject=_re_prefixed(inbound.subject),
         body_text=body,
-        message_id_header=message_id_factory(),
-        in_reply_to_header=inbound.message_id_header,
-        references_headers=references,
+        attachments=[],
+        message_id_factory=message_id_factory,
     )
-
-
-def _re_prefixed(subject: str) -> str:
-    if subject.lower().startswith("re:"):
-        return subject
-    return f"Re: {subject}"
 
 
 __all__ = ["build_budget_limit_reply"]
