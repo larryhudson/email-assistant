@@ -28,14 +28,17 @@ If `ty` flags a real type problem, prefer fixing the types over suppressing. Sup
 
 ## Architecture
 
-Ports & adapters (hexagonal). See `docs/superpowers/specs/2026-05-10-email-assistant-design.md` for the full design.
+Ports & adapters (hexagonal), grouped by capability. See `docs/superpowers/specs/2026-05-10-email-assistant-design.md` for the full design.
 
-- `src/email_agent/models/` — pure pydantic data models.
-- `src/email_agent/ports/` — `Protocol` interfaces. The core only talks to ports.
-- `src/email_agent/adapters/` — concrete implementations. `inmemory/` for tests; real adapters (Mailgun, Cognee, Docker, etc.) in later slices.
+Each external boundary gets its own package, with `port.py` defining the `Protocol` and adapter modules sitting next to it:
+
+- `src/email_agent/mail/` — `port.py` (`EmailProvider`), `inmemory.py`, later `mailgun.py`.
+- `src/email_agent/memory/` — `port.py` (`MemoryPort`), `inmemory.py`, later `cognee.py`.
+- `src/email_agent/sandbox/` — `port.py` (`AssistantSandbox`), later `inmemory.py`, `docker.py`.
+- `src/email_agent/models/` — pure pydantic data models shared across boundaries.
 - `src/email_agent/db/` — SQLAlchemy 2.0 async ORM + Alembic migrations.
 
-Never let the core import from a concrete adapter. The webhook handler / runtime / domain modules depend on `ports/`, and adapters are wired in at the edge.
+Never let the core/domain import from a concrete adapter — depend on the `port` module within each capability package, and let composition wire adapters in at the edge.
 
 ## Plans
 

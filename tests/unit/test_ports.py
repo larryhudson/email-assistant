@@ -1,8 +1,8 @@
 from typing import get_type_hints
 
-from email_agent.ports.email_provider import EmailProvider
-from email_agent.ports.memory import MemoryPort
-from email_agent.ports.sandbox import AssistantSandbox
+from email_agent.mail.port import EmailProvider
+from email_agent.memory.port import MemoryPort
+from email_agent.sandbox.port import AssistantSandbox
 
 
 def test_email_provider_has_required_methods():

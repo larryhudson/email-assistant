@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from email_agent.adapters.inmemory.email_provider import InMemoryEmailProvider
+from email_agent.mail.inmemory import InMemoryEmailProvider
 from email_agent.models.email import (
     NormalizedInboundEmail,
     NormalizedOutboundEmail,
