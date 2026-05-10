@@ -329,3 +329,65 @@ async def test_execute_run_records_failed_run_and_reraises(
         assert run.status == "failed"
         assert run.error is not None
         assert "exploded" in run.error
+
+
+def _slow_model(sleep_seconds: float = 5.0) -> FunctionModel:
+    """Model that sleeps before responding so the runtime's timeout fires."""
+    import asyncio as _asyncio
+
+    async def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        await _asyncio.sleep(sleep_seconds)
+        return ModelResponse(parts=[TextPart(content="too slow")])
+
+    return FunctionModel(fn)
+
+
+async def test_execute_run_enforces_run_timeout(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    import time
+
+    import pytest
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    email_provider = InMemoryEmailProvider()
+    sandbox = InMemorySandbox()
+    memory = InMemoryMemoryAdapter()
+    agent = AssistantAgent()
+    runtime = AssistantRuntime(
+        sqlite_session_factory,
+        attachments_root=tmp_path / "attachments",
+        email_provider=email_provider,
+        sandbox=sandbox,
+        memory=memory,
+        agent=agent,
+        projector=EmailWorkspaceProjector(run_inputs_root=tmp_path / "run_inputs"),
+        recorder=RunRecorder(sqlite_session_factory),
+        budget_governor=BudgetGovernor(sqlite_session_factory),
+        envelope_builder=ReplyEnvelopeBuilder(),
+        message_id_factory=lambda: "<run-abc@x>",
+        provider_message_id_factory=lambda: "prov-out-1",
+        run_timeout_seconds=1,
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    start = time.monotonic()
+    with (
+        agent.override_model(_scope(), _slow_model(sleep_seconds=5.0)),
+        pytest.raises(TimeoutError),
+    ):
+        await runtime.execute_run(run_id)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 3.0, f"timeout did not fire fast enough: {elapsed:.2f}s"
+
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun))).scalar_one()
+        assert run.status == "failed"
+        assert run.error is not None
+        assert "timeout" in run.error.lower() or "timed out" in run.error.lower()
