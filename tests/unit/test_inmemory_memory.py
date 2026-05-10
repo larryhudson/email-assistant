@@ -1,6 +1,6 @@
 import pytest
 
-from email_agent.adapters.inmemory.memory import InMemoryMemoryAdapter
+from email_agent.memory.inmemory import InMemoryMemoryAdapter
 
 
 @pytest.mark.asyncio

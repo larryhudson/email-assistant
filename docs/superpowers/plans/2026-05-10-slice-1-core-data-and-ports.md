@@ -4,7 +4,9 @@
 
 **Goal:** Lay the foundation for the email assistant: normalized data models, port protocols, in-memory adapters, Postgres schema (Alembic), Settings, Docker Compose, and a typer CLI skeleton — all behind the seams that later slices will plug real adapters into.
 
-**Architecture:** Ports & adapters (a.k.a. hexagonal). The core — pure pydantic data models in `src/email_agent/models/` and abstract `Protocol` interfaces ("ports") in `src/email_agent/ports/` — has no knowledge of Mailgun, Postgres, Docker, Cognee, or PydanticAI. Each external dependency is reached through a port; concrete "adapters" implement those ports. This slice ships in-memory adapters (`src/email_agent/adapters/inmemory/`) for tests; real adapters land in later slices. Persistence uses SQLAlchemy 2.0 async + Alembic in `src/email_agent/db/`. Config via `pydantic-settings`, CLI via `typer`.
+**Architecture:** Ports & adapters (a.k.a. hexagonal), grouped by capability. Each external boundary lives in its own package — `src/email_agent/mail/`, `src/email_agent/memory/`, `src/email_agent/sandbox/` — with `port.py` defining the `Protocol` and adapter modules (`inmemory.py` now, `mailgun.py` / `cognee.py` / `docker.py` later) sitting next to it. Pure pydantic data models live under `src/email_agent/models/`. The core has no knowledge of Mailgun, Postgres, Docker, Cognee, or PydanticAI — it depends on each capability's `port.py`. Persistence uses SQLAlchemy 2.0 async + Alembic in `src/email_agent/db/`. Config via `pydantic-settings`, CLI via `typer`.
+
+> **Note (post-Task-8 refactor):** Tasks 6-8 were originally written against a `src/email_agent/ports/` + `src/email_agent/adapters/inmemory/` split. After Task 8 the layout was refactored to capability packages (above). Task 9 onwards uses the new layout; the historical Task 6-8 bodies still describe the old paths but the files were `git mv`'d into the new structure.
 
 **Tech Stack:** Python 3.13 · `uv` for env/deps · `pydantic` v2 · `pydantic-settings` · `SQLAlchemy` 2.0 async · `asyncpg` · `Alembic` · `typer` · `pytest` + `pytest-asyncio` · `ruff` (lint + format) · `ty` (Astral's type checker) · `pre-commit` · Docker Compose (Postgres 16).
 
@@ -33,18 +35,18 @@ src/email_agent/
     assistant.py                                 # AssistantScope, AssistantStatus
     memory.py                                    # Memory, MemoryContext
     sandbox.py                                   # ToolCall variants, ToolResult, BashResult, ProjectedFile, PendingAttachment
-  ports/
+  mail/
     __init__.py
-    email_provider.py                            # EmailProvider Protocol
-    memory.py                                    # MemoryPort Protocol
-    sandbox.py                                   # AssistantSandbox Protocol
-  adapters/
+    port.py                                      # EmailProvider Protocol
+    inmemory.py                                  # InMemoryEmailProvider (later: mailgun.py)
+  memory/
     __init__.py
-    inmemory/
-      __init__.py
-      email_provider.py                          # InMemoryEmailProvider
-      memory.py                                  # InMemoryMemoryAdapter
-      sandbox.py                                 # InMemorySandbox
+    port.py                                      # MemoryPort Protocol
+    inmemory.py                                  # InMemoryMemoryAdapter (later: cognee.py)
+  sandbox/
+    __init__.py
+    port.py                                      # AssistantSandbox Protocol
+    inmemory.py                                  # InMemorySandbox (later: docker.py)
   db/
     __init__.py
     base.py                                      # DeclarativeBase + naming convention
@@ -73,8 +75,8 @@ tests/
 Each file has one responsibility:
 
 - `models/*.py` — frozen pydantic models, no behaviour.
-- `ports/*.py` — `Protocol` definitions only.
-- `adapters/inmemory/*.py` — in-process implementations of the ports for tests.
+- `<capability>/port.py` — the `Protocol` definition for that boundary.
+- `<capability>/inmemory.py` — in-process adapter for tests; real adapters (e.g. `mailgun.py`, `cognee.py`, `docker.py`) live alongside in later slices.
 - `db/models.py` — SQLAlchemy 2.0 typed ORM models matching the spec's data model section.
 - `db/session.py` — engine + `async_sessionmaker`.
 - `db/migrations/` — Alembic files, `env.py` reads URL from `Settings`.
@@ -1415,8 +1417,8 @@ git commit -m "feat(adapters): add InMemoryMemoryAdapter with per-assistant isol
 ## Task 9: InMemorySandbox
 
 **Files:**
-- Create: `src/email_agent/adapters/inmemory/sandbox.py`
-- Modify: `src/email_agent/adapters/inmemory/__init__.py`
+- Create: `src/email_agent/sandbox/inmemory.py`
+- Modify: `src/email_agent/sandbox/__init__.py`
 - Create: `tests/unit/test_inmemory_sandbox.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -1426,8 +1428,8 @@ Create `tests/unit/test_inmemory_sandbox.py`:
 ```python
 import pytest
 
-from email_agent.adapters.inmemory.sandbox import InMemorySandbox
 from email_agent.models.sandbox import BashResult, ProjectedFile, ToolCall
+from email_agent.sandbox.inmemory import InMemorySandbox
 
 
 @pytest.mark.asyncio
@@ -1545,7 +1547,7 @@ Expected: ImportError.
 
 - [ ] **Step 3: Implement the adapter**
 
-Create `src/email_agent/adapters/inmemory/sandbox.py`:
+Create `src/email_agent/sandbox/inmemory.py`:
 
 ```python
 import shlex
@@ -1683,16 +1685,15 @@ def _strip_leading(s: str, prefix: str) -> str:
     return s[len(prefix):] if s.startswith(prefix) else s
 ```
 
-- [ ] **Step 4: Update inmemory init**
+- [ ] **Step 4: Update sandbox init**
 
-Replace `src/email_agent/adapters/inmemory/__init__.py`:
+Replace `src/email_agent/sandbox/__init__.py`:
 
 ```python
-from email_agent.adapters.inmemory.email_provider import InMemoryEmailProvider
-from email_agent.adapters.inmemory.memory import InMemoryMemoryAdapter
-from email_agent.adapters.inmemory.sandbox import InMemorySandbox
+from email_agent.sandbox.inmemory import InMemorySandbox
+from email_agent.sandbox.port import AssistantSandbox
 
-__all__ = ["InMemoryEmailProvider", "InMemoryMemoryAdapter", "InMemorySandbox"]
+__all__ = ["AssistantSandbox", "InMemorySandbox"]
 ```
 
 - [ ] **Step 5: Run tests**
@@ -1703,8 +1704,8 @@ Expected: 8 passed.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/email_agent/adapters/inmemory/sandbox.py src/email_agent/adapters/inmemory/__init__.py tests/unit/test_inmemory_sandbox.py
-git commit -m "feat(adapters): add InMemorySandbox with /workspace/emails read-only enforcement"
+git add src/email_agent/sandbox/inmemory.py src/email_agent/sandbox/__init__.py tests/unit/test_inmemory_sandbox.py
+git commit -m "feat(sandbox): add InMemorySandbox with /workspace/emails read-only enforcement"
 ```
 
 ---
@@ -2576,10 +2577,9 @@ Expected: would-not-reformat. If reformats are needed, run `uv run ruff format s
 Run:
 ```bash
 uv run python -c "
-from email_agent.ports import EmailProvider, MemoryPort, AssistantSandbox
-from email_agent.adapters.inmemory import (
-    InMemoryEmailProvider, InMemoryMemoryAdapter, InMemorySandbox,
-)
+from email_agent.mail import EmailProvider, InMemoryEmailProvider
+from email_agent.memory import InMemoryMemoryAdapter, MemoryPort
+from email_agent.sandbox import AssistantSandbox, InMemorySandbox
 assert isinstance(InMemoryEmailProvider(), EmailProvider)
 assert isinstance(InMemoryMemoryAdapter(), MemoryPort)
 assert isinstance(InMemorySandbox(), AssistantSandbox)
