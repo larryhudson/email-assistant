@@ -6,7 +6,8 @@ construct their own runtimes with InMemory adapters; this module is for
 the live system.
 """
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -170,21 +171,27 @@ def make_runtime_from_settings(
     )
 
 
-def make_runtime_for_inject(
+@asynccontextmanager
+async def inject_session(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
     *,
     use_real_model: bool = True,
     use_real_memory: bool = True,
     use_docker_sandbox: bool = True,
-) -> tuple[AssistantRuntime, "EmailProvider"]:
-    """Build a runtime suitable for `inject-email --follow`.
+    use_procrastinate: bool = False,
+) -> "AsyncIterator[tuple[AssistantRuntime, EmailProvider]]":
+    """Async context manager yielding `(runtime, email_provider)` for the
+    `inject-email` entry point.
 
     Always uses InMemoryEmailProvider so a fixture-driven local run never
     accidentally sends real Mailgun mail. The caller can inspect
     `email_provider.sent` after the run to see what would have gone out.
-    Procrastinate is disabled — `inject-email --follow` calls execute_run
-    directly to keep the dev loop tight (no worker process needed).
+    Procrastinate defaults to off so `inject-email --follow` calls
+    execute_run directly. Pass `use_procrastinate=True` to enqueue a
+    `run_agent` job and let a separate `email-agent worker` pick it up —
+    the procrastinate App is opened for the duration of the `async with`
+    so deferrals work without further plumbing in the caller.
     """
     from email_agent.mail.inmemory import InMemoryEmailProvider
 
@@ -193,19 +200,26 @@ def make_runtime_for_inject(
         settings,
         session_factory,
         email_provider=email_provider,
-        use_procrastinate=False,
+        use_procrastinate=use_procrastinate,
         use_real_model=use_real_model,
         use_real_memory=use_real_memory,
         use_docker_sandbox=use_docker_sandbox,
         run_timeout_seconds=settings.sandbox_run_timeout_seconds,
     )
-    return runtime, email_provider
+
+    if use_procrastinate:
+        from email_agent.jobs.app import app as procrastinate_app
+
+        async with procrastinate_app.open_async():
+            yield runtime, email_provider
+    else:
+        yield runtime, email_provider
 
 
 __all__ = [
+    "inject_session",
     "make_cognee_memory",
     "make_docker_sandbox",
     "make_fireworks_model_factory",
-    "make_runtime_for_inject",
     "make_runtime_from_settings",
 ]
