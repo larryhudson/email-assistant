@@ -154,7 +154,7 @@ async def test_send_reply_attaches_files(mock_transport_factory):
     assert f["data"] == b"%PDF-1.7"
 
 
-async def _deferred_error_test(mock_transport_factory):
+async def test_send_reply_raises_typed_error_on_http_failure(mock_transport_factory):
     from email_agent.mail.mailgun import MailgunSendError
 
     transport, _ = mock_transport_factory(httpx.Response(401, json={"message": "Forbidden"}))
