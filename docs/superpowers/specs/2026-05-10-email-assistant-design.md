@@ -340,6 +340,8 @@ Per-assistant on-disk artefacts (host filesystem, not Postgres):
 | `memory_search(query)` | `MemoryPort.search(assistant_id, query)` — does not enter the container |
 | `attach_file(path, filename?)` | Records pending attachment; runtime reads bytes out post-run |
 
+The agent gets `memory_search` (read) but deliberately no write-side counterpart (`remember`, `save_fact`, etc). Memory writes happen out-of-band after the run completes — the `curate_memory` Procrastinate job extracts what's worth keeping from the recorded run + Cognee session traces. Asking the agent to decide mid-run what to persist is less reliable than letting curation see the whole turn (final reply, tool outputs, errors) and pick durable facts from that. The asymmetry is intentional.
+
 The agent navigates email history by `read`/`bash`-ing files under `/workspace/emails/`, not via a separate `inspect_thread` tool.
 
 ## Admin UI (server-rendered FastAPI + Jinja2)
