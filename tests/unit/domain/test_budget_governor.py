@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -17,8 +18,8 @@ from email_agent.models.assistant import AssistantScope, AssistantStatus
 async def _seed(
     session: AsyncSession,
     *,
-    monthly_limit_cents: int,
-    spent_cents: int,
+    monthly_limit_usd: Decimal,
+    spent_usd: Decimal,
     spent_at: datetime,
     period_starts_at: datetime = datetime(2026, 5, 1, tzinfo=UTC),
     period_resets_at: datetime = datetime(2026, 6, 1, tzinfo=UTC),
@@ -29,7 +30,7 @@ async def _seed(
         Budget(
             id="b-1",
             assistant_id="a-1",
-            monthly_limit_cents=monthly_limit_cents,
+            monthly_limit_usd=monthly_limit_usd,
             period_starts_at=period_starts_at,
             period_resets_at=period_resets_at,
         )
@@ -62,7 +63,7 @@ async def _seed(
             model="deepseek-flash",
             input_tokens=0,
             output_tokens=0,
-            cost_cents=spent_cents,
+            cost_usd=spent_usd,
             budget_period="2026-05",
             created_at=spent_at,
         )
@@ -92,8 +93,8 @@ async def test_governor_allows_when_under_limit(
     async with sqlite_session_factory() as session:
         await _seed(
             session,
-            monthly_limit_cents=1000,
-            spent_cents=100,
+            monthly_limit_usd=Decimal("10.00"),
+            spent_usd=Decimal("1.00"),
             spent_at=datetime(2026, 5, 5, tzinfo=UTC),
         )
 
@@ -109,8 +110,8 @@ async def test_governor_blocks_when_at_limit(
     async with sqlite_session_factory() as session:
         await _seed(
             session,
-            monthly_limit_cents=1000,
-            spent_cents=1000,
+            monthly_limit_usd=Decimal("10.00"),
+            spent_usd=Decimal("10.00"),
             spent_at=datetime(2026, 5, 5, tzinfo=UTC),
         )
 
@@ -119,8 +120,8 @@ async def test_governor_blocks_when_at_limit(
     decision = await governor.decide(_scope())
 
     assert decision == BudgetLimitReply(
-        monthly_limit_cents=1000,
-        spent_cents=1000,
+        monthly_limit_usd=Decimal("10.00"),
+        spent_usd=Decimal("10.00"),
         days_until_reset=3,
     )
 
@@ -131,8 +132,8 @@ async def test_governor_blocks_when_over_limit(
     async with sqlite_session_factory() as session:
         await _seed(
             session,
-            monthly_limit_cents=1000,
-            spent_cents=1500,
+            monthly_limit_usd=Decimal("10.00"),
+            spent_usd=Decimal("15.00"),
             spent_at=datetime(2026, 5, 5, tzinfo=UTC),
         )
 
@@ -141,8 +142,8 @@ async def test_governor_blocks_when_over_limit(
     decision = await governor.decide(_scope())
 
     assert decision == BudgetLimitReply(
-        monthly_limit_cents=1000,
-        spent_cents=1500,
+        monthly_limit_usd=Decimal("10.00"),
+        spent_usd=Decimal("15.00"),
         days_until_reset=1,
     )
 
@@ -159,7 +160,7 @@ async def test_governor_ignores_ledger_rows_outside_active_period(
             Budget(
                 id="b-1",
                 assistant_id="a-1",
-                monthly_limit_cents=1000,
+                monthly_limit_usd=Decimal("10.00"),
                 period_starts_at=datetime(2026, 5, 1, tzinfo=UTC),
                 period_resets_at=datetime(2026, 6, 1, tzinfo=UTC),
             )
@@ -192,7 +193,7 @@ async def test_governor_ignores_ledger_rows_outside_active_period(
                 model="deepseek-flash",
                 input_tokens=0,
                 output_tokens=0,
-                cost_cents=5000,
+                cost_usd=Decimal("50.00"),
                 budget_period="2026-04",
                 created_at=datetime(2026, 4, 15, tzinfo=UTC),
             )
@@ -206,7 +207,7 @@ async def test_governor_ignores_ledger_rows_outside_active_period(
                 model="deepseek-flash",
                 input_tokens=0,
                 output_tokens=0,
-                cost_cents=200,
+                cost_usd=Decimal("2.00"),
                 budget_period="2026-05",
                 created_at=datetime(2026, 5, 5, tzinfo=UTC),
             )

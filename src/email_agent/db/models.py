@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
@@ -6,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -14,6 +16,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from email_agent.db.base import Base
+
+# 10 digits, 4 after the decimal — enough for $999,999.9999 / row.
+USD_NUMERIC = Numeric(10, 4)
 
 
 def _str_pk() -> Mapped[str]:
@@ -212,7 +217,7 @@ class RunStep(Base):
     kind: Mapped[str] = mapped_column(String(32))
     input_summary: Mapped[str] = mapped_column(Text)
     output_summary: Mapped[str] = mapped_column(Text)
-    cost_cents: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[Decimal] = mapped_column(USD_NUMERIC, default=Decimal("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -231,7 +236,7 @@ class UsageLedger(Base):
     model: Mapped[str] = mapped_column(String(64))
     input_tokens: Mapped[int] = mapped_column(Integer)
     output_tokens: Mapped[int] = mapped_column(Integer)
-    cost_cents: Mapped[int] = mapped_column(Integer)
+    cost_usd: Mapped[Decimal] = mapped_column(USD_NUMERIC)
     budget_period: Mapped[str] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -243,7 +248,7 @@ class Budget(Base):
 
     id: Mapped[str] = _str_pk()
     assistant_id: Mapped[str] = mapped_column(ForeignKey("assistants.id"))
-    monthly_limit_cents: Mapped[int] = mapped_column(Integer)
+    monthly_limit_usd: Mapped[Decimal] = mapped_column(USD_NUMERIC)
     period_starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     period_resets_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

@@ -72,7 +72,7 @@ class RunRecorder:
                         kind=step.kind,
                         input_summary=step.input_summary,
                         output_summary=step.output_summary,
-                        cost_cents=step.cost_cents,
+                        cost_usd=step.cost_usd,
                     )
                 )
 
@@ -85,7 +85,7 @@ class RunRecorder:
                     model=completed.scope.model_name,
                     input_tokens=completed.usage.input_tokens,
                     output_tokens=completed.usage.output_tokens,
-                    cost_cents=completed.usage.cost_cents,
+                    cost_usd=completed.usage.cost_usd,
                     budget_period=datetime.now(UTC).strftime("%Y-%m"),
                 )
             )

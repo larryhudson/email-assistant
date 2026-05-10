@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -67,7 +68,7 @@ async def _seed(session: AsyncSession) -> None:
         Budget(
             id="b-1",
             assistant_id="a-1",
-            monthly_limit_cents=1000,
+            monthly_limit_usd=Decimal("10.00"),
             period_starts_at=datetime(2026, 5, 1, tzinfo=UTC),
             period_resets_at=datetime(2026, 6, 1, tzinfo=UTC),
         )

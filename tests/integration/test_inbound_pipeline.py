@@ -5,6 +5,7 @@ import json
 import os
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -96,7 +97,7 @@ async def test_round_trip_pipeline_persists_message_index_and_attachments(tmp_pa
             Budget(
                 id=f"b-{suffix}",
                 assistant_id=f"a-{suffix}",
-                monthly_limit_cents=1000,
+                monthly_limit_usd=Decimal("10.00"),
                 period_starts_at=datetime(2026, 5, 1, tzinfo=UTC),
                 period_resets_at=datetime(2026, 6, 1, tzinfo=UTC),
             )

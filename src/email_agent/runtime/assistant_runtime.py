@@ -313,7 +313,7 @@ class AssistantRuntime:
                         kind="model",
                         input_summary=prompt[:200],
                         output_summary=agent_result.body[:200],
-                        cost_cents=agent_result.usage.cost_cents,
+                        cost_usd=agent_result.usage.cost_usd,
                     )
                 ],
                 usage=agent_result.usage,
@@ -469,9 +469,11 @@ def _inbound_email_from_message(message: EmailMessage) -> NormalizedInboundEmail
 
 
 def _zero_usage():
+    from decimal import Decimal as _Decimal
+
     from email_agent.models.agent import RunUsage
 
-    return RunUsage(input_tokens=0, output_tokens=0, cost_cents=0)
+    return RunUsage(input_tokens=0, output_tokens=0, cost_usd=_Decimal("0"))
 
 
 def _default_message_id_factory() -> str:

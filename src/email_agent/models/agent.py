@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Protocol
 
 from email_agent.models.memory import Memory
@@ -40,7 +41,7 @@ class RunUsage:
 
     input_tokens: int
     output_tokens: int
-    cost_cents: int
+    cost_usd: Decimal
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class RunStepRecord:
     kind: str
     input_summary: str
     output_summary: str
-    cost_cents: int = 0
+    cost_usd: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True)
