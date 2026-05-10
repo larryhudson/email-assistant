@@ -53,6 +53,27 @@ def make_fireworks_model_factory(
     return factory
 
 
+def make_docker_sandbox(settings: Settings) -> "AssistantSandbox":
+    """Build a DockerSandbox from Settings.
+
+    Caller is responsible for ensuring the docker daemon is reachable and
+    the base image (`settings.sandbox_image`) is built — see
+    `docker/sandbox/Dockerfile` for the build recipe.
+    """
+    import docker as docker_sdk
+    from email_agent.sandbox.docker import DockerSandbox
+
+    client = docker_sdk.from_env()
+    return DockerSandbox(
+        client=client,
+        image=settings.sandbox_image,
+        sandbox_data_root=settings.sandbox_data_root,
+        memory_mb=settings.sandbox_memory_mb,
+        cpu_cores=settings.sandbox_cpu_cores,
+        bash_timeout_seconds=settings.sandbox_bash_timeout_seconds,
+    )
+
+
 def make_runtime_from_settings(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
@@ -61,18 +82,21 @@ def make_runtime_from_settings(
     sandbox: "AssistantSandbox | None" = None,
     memory: "MemoryPort | None" = None,
     use_real_model: bool = True,
+    use_docker_sandbox: bool = True,
     run_timeout_seconds: float | None = None,
 ) -> AssistantRuntime:
     """Compose a fully-wired AssistantRuntime for production-ish use.
 
-    `sandbox` defaults to an `InMemorySandbox` since the docker sandbox
-    isn't yet wired into composition (slice 6/7 work). `memory` defaults
-    to `InMemoryMemoryAdapter` for the same reason — Cognee is slice 6.
+    `sandbox` defaults to a `DockerSandbox` (`use_docker_sandbox=True`),
+    falling back to `InMemorySandbox` when the toggle is off — useful for
+    quick iteration without docker. `memory` defaults to
+    `InMemoryMemoryAdapter`; the real Cognee adapter lands in slice 6.
     `use_real_model=False` skips wiring Fireworks so callers can rely on
     a test override; `use_real_model=True` (default) plumbs through
     `make_fireworks_model_factory(settings)`.
     """
-    sandbox = sandbox or InMemorySandbox()
+    if sandbox is None:
+        sandbox = make_docker_sandbox(settings) if use_docker_sandbox else InMemorySandbox()
     memory = memory or InMemoryMemoryAdapter()
     projector = EmailWorkspaceProjector(run_inputs_root=settings.run_inputs_root)
 
@@ -99,6 +123,7 @@ def make_runtime_for_inject(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     use_real_model: bool = True,
+    use_docker_sandbox: bool = True,
 ) -> tuple[AssistantRuntime, "EmailProvider"]:
     """Build a runtime suitable for `inject-email --follow`.
 
@@ -114,12 +139,14 @@ def make_runtime_for_inject(
         session_factory,
         email_provider=email_provider,
         use_real_model=use_real_model,
+        use_docker_sandbox=use_docker_sandbox,
         run_timeout_seconds=settings.sandbox_run_timeout_seconds,
     )
     return runtime, email_provider
 
 
 __all__ = [
+    "make_docker_sandbox",
     "make_fireworks_model_factory",
     "make_runtime_for_inject",
     "make_runtime_from_settings",

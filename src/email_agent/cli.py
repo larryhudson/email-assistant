@@ -37,6 +37,11 @@ def inject_email(
         "--real-model/--no-real-model",
         help="Wire Fireworks (requires FIREWORKS_API_KEY). Disable to fail fast without an API key.",
     ),
+    use_docker_sandbox: bool = typer.Option(
+        True,
+        "--docker/--in-memory",
+        help="Use the docker sandbox (default) or the in-memory one (subprocess on host).",
+    ),
 ) -> None:
     """Inject a `.eml` fixture into the runtime — fixture-driven local dev.
 
@@ -46,7 +51,15 @@ def inject_email(
     usage, and where the would-be outbound went (always InMemory — never
     sends real mail).
     """
-    asyncio.run(_inject_email(fixture, to=to, follow=follow, use_real_model=use_real_model))
+    asyncio.run(
+        _inject_email(
+            fixture,
+            to=to,
+            follow=follow,
+            use_real_model=use_real_model,
+            use_docker_sandbox=use_docker_sandbox,
+        )
+    )
 
 
 async def _inject_email(
@@ -55,6 +68,7 @@ async def _inject_email(
     to: str | None,
     follow: bool,
     use_real_model: bool,
+    use_docker_sandbox: bool,
 ) -> None:
     from sqlalchemy import select
 
@@ -82,7 +96,10 @@ async def _inject_email(
     typer.echo(f"→ {email.from_email} → {email.to_emails!r}  subject={email.subject!r}")
 
     runtime, email_provider = make_runtime_for_inject(
-        settings, session_factory, use_real_model=use_real_model
+        settings,
+        session_factory,
+        use_real_model=use_real_model,
+        use_docker_sandbox=use_docker_sandbox,
     )
 
     accept = await runtime.accept_inbound(email)
