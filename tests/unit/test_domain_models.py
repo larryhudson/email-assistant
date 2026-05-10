@@ -48,7 +48,7 @@ def test_assistant_scope_rejects_mutation():
         system_prompt="p",
     )
     with pytest.raises(ValidationError):
-        scope.status = AssistantStatus.PAUSED  # ty: ignore[invalid-assignment]
+        scope.status = AssistantStatus.PAUSED
 
 
 def test_memory_and_context():
