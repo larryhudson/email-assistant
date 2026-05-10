@@ -17,7 +17,7 @@ def test_settings_loads_required_fields(monkeypatch):
     monkeypatch.setenv("COGNEE_LLM_API_KEY", "cog-llm")
     monkeypatch.setenv("COGNEE_EMBEDDING_API_KEY", "cog-emb")
 
-    s = Settings()  # type: ignore[missing-argument]  # ty:ignore[missing-argument]
+    s = Settings()  # ty: ignore[missing-argument]
 
     assert str(s.database_url).startswith("postgresql+asyncpg://")
     assert isinstance(s.mailgun_signing_key, SecretStr)
@@ -32,4 +32,4 @@ def test_settings_missing_required_field_raises(monkeypatch):
     monkeypatch.delenv("MAILGUN_SIGNING_KEY", raising=False)
 
     with pytest.raises(ValidationError, match="database_url"):
-        Settings(_env_file=None)  # type: ignore[missing-argument, unknown-argument]  # ty:ignore[missing-argument, unknown-argument]
+        Settings(_env_file=None)  # ty: ignore[missing-argument, unknown-argument]
