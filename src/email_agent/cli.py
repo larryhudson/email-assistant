@@ -196,10 +196,10 @@ def seed_assistant(
     monthly_budget_cents: int = typer.Option(
         1000, "--monthly-budget-cents", help="Monthly cap in cents (default $10)."
     ),
-    model: str = typer.Option(
-        "accounts/fireworks/models/minimax-m2p7",
+    model: str | None = typer.Option(
+        None,
         "--model",
-        help="Model id to record on the assistant row.",
+        help="Model id to record on the assistant row. Defaults to FIREWORKS_MODEL_ID.",
     ),
     system_prompt: str | None = typer.Option(
         None,
@@ -259,7 +259,7 @@ async def _seed_assistant(
     end_user_name: str | None,
     owner_name: str,
     monthly_budget_cents: int,
-    model: str,
+    model: str | None,
     system_prompt: str,
     allowed_senders: list[str],
     memory_namespace: str | None,
@@ -282,6 +282,7 @@ async def _seed_assistant(
     settings = Settings()  # ty: ignore[missing-argument]
     engine = make_engine(settings)
     session_factory = make_session_factory(engine)
+    model_id = model or settings.fireworks_model_id
 
     async with session_factory() as session:
         # Idempotent on inbound_address.
@@ -344,7 +345,7 @@ async def _seed_assistant(
                 inbound_address=inbound_address,
                 status="active",
                 allowed_senders=allowed_senders,
-                model=model,
+                model=model_id,
                 system_prompt=system_prompt,
             )
         )

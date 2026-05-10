@@ -30,25 +30,22 @@ if TYPE_CHECKING:
 def make_fireworks_model_factory(
     settings: Settings,
 ) -> "Callable[[AssistantScope], Model]":
-    """Return a factory that builds a Fireworks model.
+    """Return a factory that builds a Fireworks model from `scope.model_name`.
 
-    `scope.model_name` is treated as a short alias; the actual Fireworks
-    model id comes from `settings.fireworks_model_id`. If the scope's name
-    already looks like a fully-qualified Fireworks id (`accounts/...`), it
-    overrides the setting — useful for per-assistant model overrides later.
+    `scope.model_name` is the full Fireworks model id (e.g.
+    `accounts/fireworks/models/minimax-m2p7`) — short aliases were dropped
+    because they fragmented across the model factory, the pricing table,
+    and the usage_ledger writer. Storing the full id on the assistant row
+    keeps everything consistent.
     """
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.fireworks import FireworksProvider
 
     api_key = settings.fireworks_api_key.get_secret_value()
-    default_model_id = settings.fireworks_model_id
 
     def factory(scope: AssistantScope) -> "Model":
-        model_id = (
-            scope.model_name if scope.model_name.startswith("accounts/") else default_model_id
-        )
         provider = FireworksProvider(api_key=api_key)
-        return OpenAIChatModel(model_id, provider=provider)
+        return OpenAIChatModel(scope.model_name, provider=provider)
 
     return factory
 
