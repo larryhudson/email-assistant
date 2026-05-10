@@ -1,6 +1,11 @@
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    from email_agent.db.models import Assistant as AssistantRow
+    from email_agent.db.models import AssistantScopeRow, EndUser, Owner
 
 
 class AssistantStatus(StrEnum):
@@ -41,3 +46,31 @@ class AssistantScope(BaseModel):
         """
         target = email.lower()
         return any(s.lower() == target for s in self.allowed_senders)
+
+    @classmethod
+    def from_rows(
+        cls,
+        *,
+        owner: "Owner",
+        end_user: "EndUser",
+        assistant: "AssistantRow",
+        scope_row: "AssistantScopeRow",
+    ) -> "AssistantScope":
+        """Flatten the three persisted rows into the wire-side scope.
+
+        Lives on the wire model because that's the side that owns the shape;
+        the ORM is a dumb storage representation.
+        """
+        return cls(
+            assistant_id=assistant.id,
+            owner_id=owner.id,
+            end_user_id=end_user.id,
+            inbound_address=assistant.inbound_address,
+            status=AssistantStatus(assistant.status),
+            allowed_senders=tuple(assistant.allowed_senders),
+            memory_namespace=scope_row.memory_namespace,
+            tool_allowlist=tuple(scope_row.tool_allowlist),
+            budget_id=scope_row.budget_id,
+            model_name=assistant.model,
+            system_prompt=assistant.system_prompt,
+        )
