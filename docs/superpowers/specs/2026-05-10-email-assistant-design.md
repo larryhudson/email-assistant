@@ -172,11 +172,53 @@ Plus a `current_message_path` string passed to the agent prompt pointing at the 
 
 #### `AssistantAgent`
 
-Wraps a PydanticAI agent. Tools registered: `read`, `write`, `edit`, `bash`, `memory_search`, `attach_file`. The first four route through `AssistantSandbox`; `memory_search` calls `MemoryPort.search`; `attach_file` records `(path, filename)` for the runtime to read out post-run via `sandbox.read_attachment_out`.
+Wraps a PydanticAI `Agent`. One `Agent` instance per assistant, cached for the process lifetime. Per-run state flows through `RunContext[AgentDeps]`.
 
-Input bundle: assistant config, recent thread window (rendered text, not files — files are in the workspace too), memory recall snippet, current message path inside the workspace, run constraints (timeout, max steps).
+```python
+@dataclass
+class AgentDeps:
+    assistant_id: str
+    run_id: str
+    thread_id: str
+    sandbox: AssistantSandbox
+    memory: MemoryPort
+    pending_attachments: list[PendingAttachment]   # mutated by attach_file tool
 
-Output: `AgentReply` with body text and a list of pending attachment paths.
+agent = Agent(
+    model=model_for(assistant.model),    # DeepSeek via OpenAI-compatible wrapper
+    deps_type=AgentDeps,
+    output_type=str,                      # the reply body
+    instructions=assistant.system_prompt,
+)
+
+@agent.tool
+async def read(ctx: RunContext[AgentDeps], path: str) -> str: ...
+
+@agent.tool
+async def write(ctx: RunContext[AgentDeps], path: str, content: str) -> None: ...
+
+@agent.tool
+async def edit(ctx: RunContext[AgentDeps], path: str, old: str, new: str) -> None: ...
+
+@agent.tool
+async def bash(ctx: RunContext[AgentDeps], command: str) -> BashResult: ...
+
+@agent.tool
+async def memory_search(ctx: RunContext[AgentDeps], query: str) -> list[Memory]: ...
+
+@agent.tool
+async def attach_file(ctx: RunContext[AgentDeps], path: str, filename: str | None = None) -> None: ...
+```
+
+The first four route through `ctx.deps.sandbox`; `memory_search` calls `ctx.deps.memory.search(ctx.deps.assistant_id, query)`; `attach_file` appends to `ctx.deps.pending_attachments`. The runtime reads attachment bytes out of the sandbox after `agent.run()` returns.
+
+Each inbound email is a single `agent.run(prompt, deps=...)`. PydanticAI handles the internal tool-call loop automatically. No cross-email `message_history` — the workspace's email files are the conversation record.
+
+The prompt passed to `agent.run` includes: the path to the current message file inside `/workspace`, recent memory recall, and run constraints (max steps, timeout).
+
+Output: `AgentReply(body=result.output, attachments=deps.pending_attachments)`.
+
+**Model support:** PydanticAI lists DeepSeek as an OpenAI-compatible provider, configured via the OpenAI provider class with a custom `base_url` and API key. The `model_for(name)` helper hides this; assistants reference models by short name (e.g. `"deepseek-flash"`).
 
 #### `ReplyEnvelopeBuilder`
 
