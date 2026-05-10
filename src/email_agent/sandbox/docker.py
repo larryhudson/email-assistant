@@ -5,7 +5,7 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
-from email_agent.models.sandbox import ProjectedFile, ToolCall, ToolResult
+from email_agent.models.sandbox import BashResult, ProjectedFile, ToolCall, ToolResult
 
 if TYPE_CHECKING:
     from docker.models.containers import Container
@@ -151,7 +151,36 @@ class DockerSandbox:
             updated = current.replace(call.old, call.new, 1)
             self._write_file(container, call.path, updated.encode("utf-8"))
             return ToolResult(ok=True)
+        if call.kind == "bash":
+            assert call.command is not None
+            return self._run_bash(container, call.command)
         raise NotImplementedError(f"run_tool: {call.kind} lands in a later task")
+
+    def _run_bash(self, container: "Container", command: str) -> ToolResult:
+        timeout_s = self._bash_timeout_seconds
+        # GNU `timeout` (in the base image) handles per-call wall-clock; exit
+        # code 124 means the command was killed.
+        wrapped = ["timeout", "--signal=KILL", str(timeout_s), "bash", "-c", command]
+        start = time.monotonic()
+        code, output = container.exec_run(wrapped, demux=True)
+        duration_ms = int((time.monotonic() - start) * 1000)
+        stdout_b, stderr_b = output if output else (b"", b"")
+        stdout = (stdout_b or b"").decode("utf-8", errors="replace")
+        stderr = (stderr_b or b"").decode("utf-8", errors="replace")
+        if code == 124 or code == 137:
+            return ToolResult(
+                ok=False,
+                error=f"command timed out after {timeout_s}s",
+                output=BashResult(
+                    exit_code=code, stdout=stdout, stderr=stderr, duration_ms=duration_ms
+                ),
+            )
+        return ToolResult(
+            ok=True,
+            output=BashResult(
+                exit_code=code, stdout=stdout, stderr=stderr, duration_ms=duration_ms
+            ),
+        )
 
     def _write_file(self, container: "Container", path: str, content: bytes) -> None:
         rel = path.lstrip("/")

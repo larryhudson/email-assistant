@@ -263,3 +263,46 @@ async def test_run_tool_edit_old_not_found_returns_error(sandbox, assistant_id):
         assistant_id, "r-1", ToolCall(kind="read", path="notes/plan.md")
     )
     assert read_result.output == "hello\n"
+
+
+async def test_run_tool_bash_captures_stdout_exit(sandbox, assistant_id):
+    from email_agent.models.sandbox import BashResult, ToolCall
+
+    await sandbox.ensure_started(assistant_id)
+    result = await sandbox.run_tool(
+        assistant_id, "r-1", ToolCall(kind="bash", command="echo hello")
+    )
+    assert result.ok is True
+    assert isinstance(result.output, BashResult)
+    assert result.output.exit_code == 0
+    assert "hello" in result.output.stdout
+
+
+async def test_run_tool_bash_times_out(tmp_path, assistant_id):
+    import docker
+    from email_agent.sandbox.docker import DockerSandbox
+
+    client = docker.from_env()
+    fast_sandbox = DockerSandbox(
+        client=client,
+        image="email-agent-sandbox:slice4",
+        sandbox_data_root=tmp_path / "sandboxes",
+        memory_mb=512,
+        cpu_cores=1.0,
+        bash_timeout_seconds=2,
+    )
+    try:
+        from email_agent.models.sandbox import ToolCall
+
+        await fast_sandbox.ensure_started(assistant_id)
+        result = await fast_sandbox.run_tool(
+            assistant_id, "r-1", ToolCall(kind="bash", command="sleep 30")
+        )
+        assert result.ok is False
+        assert result.error is not None
+        assert "timeout" in result.error.lower() or "timed out" in result.error.lower()
+    finally:
+        import contextlib
+
+        with contextlib.suppress(docker.errors.NotFound):
+            client.containers.get(f"email-agent-sandbox-{assistant_id}").remove(force=True)
