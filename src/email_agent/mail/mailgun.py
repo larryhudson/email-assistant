@@ -4,6 +4,8 @@ import hmac
 import json
 from datetime import UTC, datetime
 
+import httpx
+
 from email_agent.models.email import (
     EmailAttachment,
     NormalizedInboundEmail,
@@ -21,17 +23,36 @@ class MailgunParseError(Exception):
     """Mailgun webhook payload was malformed — drop the request."""
 
 
+class MailgunSendError(Exception):
+    """Mailgun rejected an outbound message; carries status + body for logs."""
+
+    def __init__(self, status_code: int, body: str) -> None:
+        super().__init__(f"mailgun send failed: {status_code} {body}")
+        self.status_code = status_code
+        self.body = body
+
+
 class MailgunEmailProvider:
     """Mailgun adapter for `EmailProvider`.
 
     `verify_webhook` checks the HMAC-SHA256 signature Mailgun attaches to
     every webhook (`timestamp + token` signed with the signing key).
     `parse_inbound` translates Mailgun's form payload into the wire model.
-    `send_reply` is a placeholder until slice 3.
+    `send_reply` POSTs to Mailgun's messages API with threading headers.
     """
 
-    def __init__(self, *, signing_key: str) -> None:
+    def __init__(
+        self,
+        *,
+        signing_key: str,
+        api_key: str | None = None,
+        domain: str | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._signing_key = signing_key.encode()
+        self._api_key = api_key
+        self._domain = domain
+        self._transport = transport
 
     async def verify_webhook(self, request: WebhookRequest) -> None:
         try:
@@ -81,7 +102,44 @@ class MailgunEmailProvider:
         )
 
     async def send_reply(self, reply: NormalizedOutboundEmail) -> SentEmail:
-        raise NotImplementedError("send_reply lands in slice 3")
+        if self._api_key is None or self._domain is None:
+            raise RuntimeError("send_reply requires api_key and domain")
+
+        data: dict[str, str | list[str]] = {
+            "from": reply.from_email,
+            "to": list(reply.to_emails),
+            "subject": reply.subject,
+            "text": reply.body_text,
+            "h:Message-Id": reply.message_id_header.strip("<>"),
+        }
+        if reply.in_reply_to_header is not None:
+            data["h:In-Reply-To"] = reply.in_reply_to_header
+        if reply.references_headers:
+            data["h:References"] = " ".join(reply.references_headers)
+
+        files: list[tuple[str, tuple[str, bytes, str]]] = [
+            ("attachment", (att.filename, att.data, att.content_type)) for att in reply.attachments
+        ]
+
+        url = f"https://api.mailgun.net/v3/{self._domain}/messages"
+        auth = ("api", self._api_key)
+
+        async with httpx.AsyncClient(transport=self._transport) as client:
+            response = await client.post(
+                url,
+                data=data,
+                files=files or None,
+                auth=auth,
+            )
+
+        if response.status_code >= 400:
+            raise MailgunSendError(response.status_code, response.text)
+
+        payload = response.json()
+        return SentEmail(
+            provider_message_id=payload["id"],
+            message_id_header=reply.message_id_header,
+        )
 
 
 def _parse_headers(raw: str) -> dict[str, str]:
