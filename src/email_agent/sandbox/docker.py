@@ -53,12 +53,12 @@ class DockerSandbox:
         await asyncio.to_thread(self._ensure_started_sync, assistant_id)
 
     def _ensure_started_sync(self, assistant_id: str) -> None:
-        import docker as docker_sdk
+        import docker.errors
 
         name = self._container_name(assistant_id)
         try:
             container = self._client.containers.get(name)
-        except docker_sdk.errors.NotFound:
+        except docker.errors.NotFound:
             self._create_container(assistant_id, name)
             return
 
@@ -169,9 +169,9 @@ class DockerSandbox:
         await asyncio.to_thread(self._reset_sync, assistant_id)
 
     def _reset_sync(self, assistant_id: str) -> None:
-        import docker as docker_sdk
+        import docker.errors
 
-        with contextlib.suppress(docker_sdk.errors.NotFound):
+        with contextlib.suppress(docker.errors.NotFound):
             self._container(assistant_id).remove(force=True)
         host_workspace = self._workspace_dir(assistant_id)
         if host_workspace.exists():
