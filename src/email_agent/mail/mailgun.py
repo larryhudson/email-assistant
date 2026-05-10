@@ -1,9 +1,11 @@
+import base64
 import hashlib
 import hmac
 import json
 from datetime import UTC, datetime
 
 from email_agent.models.email import (
+    EmailAttachment,
     NormalizedInboundEmail,
     NormalizedOutboundEmail,
     SentEmail,
@@ -62,6 +64,7 @@ class MailgunEmailProvider:
         headers = _parse_headers(form.get("message-headers", "[]"))
         in_reply_to = headers.get("In-Reply-To")
         references = _split_references(headers.get("References", ""))
+        attachments = _parse_attachments(form.get("attachments", "[]"))
 
         return NormalizedInboundEmail(
             provider_message_id=message_id_header.strip("<>"),
@@ -73,6 +76,7 @@ class MailgunEmailProvider:
             subject=subject,
             body_text=body_text,
             body_html=form.get("body-html") or None,
+            attachments=attachments,
             received_at=datetime.fromtimestamp(int(timestamp), tz=UTC),
         )
 
@@ -95,3 +99,30 @@ def _parse_headers(raw: str) -> dict[str, str]:
 
 def _split_references(raw: str) -> list[str]:
     return [token for token in raw.split() if token]
+
+
+def _parse_attachments(raw: str) -> list[EmailAttachment]:
+    try:
+        items = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise MailgunParseError(f"bad attachments JSON: {exc}") from exc
+    if not items:
+        return []
+
+    out: list[EmailAttachment] = []
+    for item in items:
+        try:
+            content_b64 = item["content"]
+        except KeyError as exc:
+            raise MailgunParseError(
+                "attachment missing inline `content` field; URL-fetch path not yet implemented"
+            ) from exc
+        out.append(
+            EmailAttachment(
+                filename=item["filename"],
+                content_type=item.get("content-type", "application/octet-stream"),
+                size_bytes=int(item.get("size", 0)),
+                data=base64.b64decode(content_b64),
+            )
+        )
+    return out

@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import json
@@ -127,3 +128,32 @@ async def test_parse_inbound_raises_on_missing_required_field():
         await provider.parse_inbound(
             WebhookRequest(headers={}, body=b"", form=form),
         )
+
+
+async def test_parse_inbound_includes_inline_attachments():
+    encoded = base64.b64encode(b"%PDF").decode()
+    attachments_field = json.dumps(
+        [
+            {
+                "filename": "receipt.pdf",
+                "content-type": "application/pdf",
+                "size": 4,
+                "content": encoded,
+            }
+        ]
+    )
+    provider = MailgunEmailProvider(signing_key=SIGNING_KEY)
+    email = await provider.parse_inbound(
+        WebhookRequest(
+            headers={},
+            body=b"",
+            form=_form(attachments=attachments_field),
+        ),
+    )
+
+    assert len(email.attachments) == 1
+    att = email.attachments[0]
+    assert att.filename == "receipt.pdf"
+    assert att.content_type == "application/pdf"
+    assert att.size_bytes == 4
+    assert att.data == b"%PDF"
