@@ -128,7 +128,51 @@ class DockerSandbox:
             if code != 0:
                 return ToolResult(ok=False, error=output.decode("utf-8", errors="replace"))
             return ToolResult(ok=True, output=output.decode("utf-8"))
+        if call.kind == "write":
+            assert call.path is not None
+            assert call.content is not None
+            if self._is_under_emails(call.path):
+                return ToolResult(ok=False, error="emails/ is read-only; refuse write")
+            self._write_file(container, call.path, call.content.encode("utf-8"))
+            return ToolResult(ok=True)
+        if call.kind == "edit":
+            assert call.path is not None
+            assert call.old is not None
+            assert call.new is not None
+            if self._is_under_emails(call.path):
+                return ToolResult(ok=False, error="emails/ is read-only; refuse edit")
+            absolute = self._resolve_workspace_path(call.path)
+            code, output = container.exec_run(["cat", absolute], demux=False)
+            if code != 0:
+                return ToolResult(ok=False, error=output.decode("utf-8", errors="replace"))
+            current = output.decode("utf-8")
+            if call.old not in current:
+                return ToolResult(ok=False, error=f"old string not found in {call.path}")
+            updated = current.replace(call.old, call.new, 1)
+            self._write_file(container, call.path, updated.encode("utf-8"))
+            return ToolResult(ok=True)
         raise NotImplementedError(f"run_tool: {call.kind} lands in a later task")
+
+    def _write_file(self, container: "Container", path: str, content: bytes) -> None:
+        rel = path.lstrip("/")
+        if rel.startswith("workspace/"):
+            rel = rel[len("workspace/") :]
+        # Ensure parent dir exists, then put_archive of the single file.
+        parent = str(PurePosixPath(rel).parent)
+        if parent and parent != ".":
+            container.exec_run(["mkdir", "-p", f"{WORKSPACE_ROOT}/{parent}"])
+        self._put_files(
+            container,
+            root=WORKSPACE_ROOT,
+            files=[ProjectedFile(path=rel, content=content)],
+        )
+
+    @staticmethod
+    def _is_under_emails(path: str) -> bool:
+        normalized = path.lstrip("/")
+        if normalized.startswith("workspace/"):
+            normalized = normalized[len("workspace/") :]
+        return normalized.startswith("emails/") or normalized == "emails"
 
     @staticmethod
     def _resolve_workspace_path(path: str) -> str:

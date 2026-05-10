@@ -172,3 +172,94 @@ async def test_run_tool_read_missing_file_returns_error(sandbox, assistant_id):
 
     assert result.ok is False
     assert result.error is not None
+
+
+async def test_run_tool_write_creates_file(sandbox, assistant_id):
+    from email_agent.models.sandbox import ToolCall
+
+    await sandbox.ensure_started(assistant_id)
+    write_result = await sandbox.run_tool(
+        assistant_id,
+        "r-1",
+        ToolCall(kind="write", path="notes/draft.md", content="hello\n"),
+    )
+    assert write_result.ok is True
+
+    read_result = await sandbox.run_tool(
+        assistant_id, "r-1", ToolCall(kind="read", path="notes/draft.md")
+    )
+    assert read_result.ok is True
+    assert read_result.output == "hello\n"
+
+
+async def test_run_tool_write_refuses_under_emails(sandbox, assistant_id):
+    from email_agent.models.sandbox import ProjectedFile, ToolCall
+
+    await sandbox.ensure_started(assistant_id)
+    await sandbox.project_emails(
+        assistant_id,
+        [ProjectedFile(path="emails/t-1/thread.md", content=b"original\n")],
+    )
+
+    result = await sandbox.run_tool(
+        assistant_id,
+        "r-1",
+        ToolCall(kind="write", path="emails/t-1/thread.md", content="tampered\n"),
+    )
+    assert result.ok is False
+    assert result.error is not None
+    assert "read-only" in result.error.lower() or "refuse" in result.error.lower()
+
+    # Original unchanged
+    read_result = await sandbox.run_tool(
+        assistant_id, "r-1", ToolCall(kind="read", path="emails/t-1/thread.md")
+    )
+    assert read_result.output == "original\n"
+
+
+async def test_run_tool_edit_applies_replacement(sandbox, assistant_id):
+    from email_agent.models.sandbox import ToolCall
+
+    await sandbox.ensure_started(assistant_id)
+    await sandbox.run_tool(
+        assistant_id,
+        "r-1",
+        ToolCall(kind="write", path="notes/plan.md", content="hello world\n"),
+    )
+
+    edit_result = await sandbox.run_tool(
+        assistant_id,
+        "r-1",
+        ToolCall(kind="edit", path="notes/plan.md", old="world", new="planet"),
+    )
+    assert edit_result.ok is True
+
+    read_result = await sandbox.run_tool(
+        assistant_id, "r-1", ToolCall(kind="read", path="notes/plan.md")
+    )
+    assert read_result.output == "hello planet\n"
+
+
+async def test_run_tool_edit_old_not_found_returns_error(sandbox, assistant_id):
+    from email_agent.models.sandbox import ToolCall
+
+    await sandbox.ensure_started(assistant_id)
+    await sandbox.run_tool(
+        assistant_id,
+        "r-1",
+        ToolCall(kind="write", path="notes/plan.md", content="hello\n"),
+    )
+
+    edit_result = await sandbox.run_tool(
+        assistant_id,
+        "r-1",
+        ToolCall(kind="edit", path="notes/plan.md", old="missing", new="x"),
+    )
+    assert edit_result.ok is False
+    assert edit_result.error is not None
+    assert "not found" in edit_result.error.lower()
+
+    read_result = await sandbox.run_tool(
+        assistant_id, "r-1", ToolCall(kind="read", path="notes/plan.md")
+    )
+    assert read_result.output == "hello\n"
