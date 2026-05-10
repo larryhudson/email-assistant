@@ -31,6 +31,11 @@ async def test_alembic_upgrade_head_creates_expected_tables():
         "usage_ledger",
         "budgets",
         "alembic_version",
+        # Procrastinate-owned tables — applied via the proc01 alembic revision.
+        "procrastinate_jobs",
+        "procrastinate_events",
+        "procrastinate_periodic_defers",
+        "procrastinate_workers",
     }
     async with engine.connect() as conn:
         rows = await conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname='public'"))
