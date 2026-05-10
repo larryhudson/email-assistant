@@ -4,7 +4,7 @@
 # Web binds to 127.0.0.1:8001; worker runs in dry-run mode by default —
 # see Procfile.dev to flip that off for real Mailgun sending.
 dev: db-up migrate
-	hivemind Procfile.dev
+	hivemind Procfile.dev 2>&1 | tee dev.log
 
 # Postgres only — `make dev` already calls this; here for ad-hoc use.
 db-up:

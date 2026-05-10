@@ -20,6 +20,9 @@ __pycache__/
 data/
 .env
 
+# Dev process log (written by `make dev` via tee)
+dev.log
+
 # Editor
 .vscode/
 .idea/
