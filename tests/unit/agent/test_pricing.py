@@ -27,3 +27,26 @@ def test_small_run_rounds_up_to_at_least_one_cent() -> None:
 def test_unknown_model_falls_back_to_default() -> None:
     cost = estimate_cost_cents(model="bogus", input_tokens=1_000_000, output_tokens=0)
     assert cost == 50
+
+
+def test_cache_read_tokens_billed_at_cache_rate() -> None:
+    # 1M total prompt tokens, all served from cache → 6 cents (not 30).
+    cost = estimate_cost_cents(
+        model="accounts/fireworks/models/minimax-m2p7",
+        input_tokens=1_000_000,
+        output_tokens=0,
+        cache_read_tokens=1_000_000,
+    )
+    assert cost == 6
+
+
+def test_partial_cache_split_billing() -> None:
+    # 1M input total, 800k from cache → 200k uncached at 30c + 800k at 6c
+    # = 6 + 4.8 = 10.8 cents → rounded up to 11.
+    cost = estimate_cost_cents(
+        model="accounts/fireworks/models/minimax-m2p7",
+        input_tokens=1_000_000,
+        output_tokens=0,
+        cache_read_tokens=800_000,
+    )
+    assert cost == 11

@@ -149,6 +149,7 @@ class AssistantAgent:
         usage = result.usage()
         input_tokens = usage.input_tokens or 0
         output_tokens = usage.output_tokens or 0
+        cache_read_tokens = getattr(usage, "cache_read_tokens", 0) or 0
         return AgentResult(
             body=result.output,
             usage=RunUsage(
@@ -158,6 +159,7 @@ class AssistantAgent:
                     model=scope.model_name,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
+                    cache_read_tokens=cache_read_tokens,
                 ),
             ),
         )
