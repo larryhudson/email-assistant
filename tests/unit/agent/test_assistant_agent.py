@@ -98,6 +98,31 @@ async def test_read_tool_routes_through_sandbox() -> None:
     assert "greetings" in result.body
 
 
+async def test_read_tool_returns_error_text_instead_of_raising() -> None:
+    sandbox = InMemorySandbox()
+    memory = InMemoryMemoryAdapter()
+    await sandbox.ensure_started("a-1")
+
+    agent = AssistantAgent()
+    deps = AgentDeps(
+        assistant_id="a-1",
+        run_id="r-1",
+        thread_id="t-1",
+        sandbox=sandbox,
+        memory=memory,
+        pending_attachments=[],
+    )
+
+    with agent.override_model(
+        _scope(),
+        _call_then_echo("read", {"path": "emails/t-1/missing.md"}),
+    ):
+        result = await agent.run(_scope(), prompt="please read", deps=deps)
+
+    assert "ERROR: read(emails/t-1/missing.md) failed" in result.body
+    assert "not found" in result.body
+
+
 async def test_write_tool_routes_through_sandbox() -> None:
     sandbox = InMemorySandbox()
     memory = InMemoryMemoryAdapter()
@@ -277,3 +302,29 @@ async def test_attach_file_defaults_filename_to_basename() -> None:
     assert deps.pending_attachments == [
         PendingAttachment(sandbox_path="docs/report.pdf", filename="report.pdf")
     ]
+
+
+async def test_attach_file_returns_error_text_instead_of_raising() -> None:
+    sandbox = InMemorySandbox()
+    memory = InMemoryMemoryAdapter()
+    await sandbox.ensure_started("a-1")
+
+    agent = AssistantAgent()
+    deps = AgentDeps(
+        assistant_id="a-1",
+        run_id="r-1",
+        thread_id="t-1",
+        sandbox=sandbox,
+        memory=memory,
+        pending_attachments=[],
+    )
+
+    with agent.override_model(
+        _scope(),
+        _call_then_echo("attach_file", {"path": "missing.pdf"}),
+    ):
+        result = await agent.run(_scope(), prompt="please attach", deps=deps)
+
+    assert "ERROR: attach_file(missing.pdf) failed" in result.body
+    assert "not found" in result.body
+    assert deps.pending_attachments == []

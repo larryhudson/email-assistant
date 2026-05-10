@@ -18,7 +18,7 @@ Inbound mail hits Mailgun, which calls a webhook on this service. A run is
 queued in Postgres and a background worker drives the agent loop:
 
 ```
-Mailgun → /webhooks/mailgun/inbound (FastAPI)
+Mailgun → /webhooks/mailgun (FastAPI)
         → verify signature, parse, route to assistant by inbound address
         → resolve thread (Message-ID / In-Reply-To / References)
         → persist inbound, queue run_agent(run_id)   ← returns 200 fast
@@ -86,7 +86,7 @@ fakes.
 - [uv](https://docs.astral.sh/uv/)
 - Docker (for Postgres + the agent sandbox)
 - [hivemind](https://github.com/DarthSim/hivemind) (`brew install hivemind`) — runs the dev process stack
-- [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/) (`brew install cloudflared`) — public URL for Mailgun → local webhook
+- [Tailscale](https://tailscale.com/download) with Funnel enabled — public URL for Mailgun → local webhook
 - A Mailgun account with an inbound route, plus API keys for Fireworks and OpenAI (for embeddings)
 
 ### Setup
@@ -96,6 +96,10 @@ uv sync                           # install deps + dev deps
 cp .env.example .env              # then fill in real keys
 ```
 
+Set `ADMIN_BASIC_AUTH_USERNAME` and `ADMIN_BASIC_AUTH_PASSWORD` in `.env`.
+The public `/admin` UI requires these credentials; the Mailgun webhook does
+not.
+
 ### Run the dev stack
 
 ```bash
@@ -103,17 +107,21 @@ make dev
 ```
 
 That brings up Postgres (via `docker-compose`), runs migrations, then
-launches hivemind on `Procfile.dev` which runs three processes together:
+launches hivemind on `Procfile.dev` which runs two processes together:
 
-- **web** — FastAPI app on `http://127.0.0.1:8000`. Admin UI at `/admin/`,
-  Mailgun webhook at `/webhooks/mailgun/inbound`.
+- **web** — FastAPI app on `http://127.0.0.1:18788`. Admin UI at `/admin/`,
+  Mailgun webhook at `/webhooks/mailgun`.
 - **worker** — Procrastinate worker that picks up `run_agent` and
   `curate_memory` jobs.
-- **tunnel** — `cloudflared` quick tunnel; the printed
-  `https://<random>.trycloudflare.com` URL goes into Mailgun's inbound route
-  action so external mail reaches the local app.
 
-All three processes' output is also tee'd to `dev.log`.
+Tailscale Funnel is configured once on the machine. The Mailgun inbound route
+action should point at:
+
+```text
+https://<machine>.<tailnet>.ts.net:<funnel-port>/webhooks/mailgun
+```
+
+Both processes' output is also tee'd to `dev.log`.
 
 To exercise the loop without sending real Mailgun replies, prefix the
 worker line in `Procfile.dev` with `EMAIL_AGENT_WORKER_DRY_RUN=true` — it

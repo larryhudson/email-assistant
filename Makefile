@@ -1,8 +1,9 @@
 .PHONY: dev db-up db-down migrate test
 
 # Bring up the dev process stack: Postgres (docker), web + worker (hivemind).
-# Web binds to 127.0.0.1:8001; worker runs in dry-run mode by default —
-# see Procfile.dev to flip that off for real Mailgun sending.
+# Web binds to 127.0.0.1:18788; worker sends real Mailgun replies by default.
+# Set EMAIL_AGENT_WORKER_DRY_RUN=true on the worker line in Procfile.dev to
+# suppress sends during local testing.
 dev: db-up migrate
 	hivemind Procfile.dev 2>&1 | tee dev.log
 
