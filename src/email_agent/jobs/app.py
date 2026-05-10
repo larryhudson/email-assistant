@@ -119,4 +119,31 @@ async def curate_memory(*, assistant_id: str, thread_id: str, run_id: str) -> No
     )
 
 
-__all__ = ["app", "build_worker_deps", "curate_memory", "make_procrastinate_app", "run_agent"]
+async def defer_run_agent(*, run_id: str, assistant_id: str) -> None:
+    """Production `run_agent_defer` callback for `AssistantRuntime`.
+
+    Sets `queueing_lock=f"assistant-{assistant_id}"` so concurrent inbounds
+    for the same assistant serialize while different assistants run in
+    parallel.
+    """
+    await run_agent.configure(queueing_lock=f"assistant-{assistant_id}").defer_async(run_id=run_id)
+
+
+async def defer_curate_memory(*, assistant_id: str, thread_id: str, run_id: str) -> None:
+    """Production `curate_memory_defer` callback for `RunRecorder`.
+
+    No queueing_lock — curate jobs are independent of run ordering and
+    cognee adapter holds its own process-wide lock.
+    """
+    await curate_memory.defer_async(assistant_id=assistant_id, thread_id=thread_id, run_id=run_id)
+
+
+__all__ = [
+    "app",
+    "build_worker_deps",
+    "curate_memory",
+    "defer_curate_memory",
+    "defer_run_agent",
+    "make_procrastinate_app",
+    "run_agent",
+]

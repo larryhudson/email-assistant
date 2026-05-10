@@ -115,6 +115,7 @@ def make_runtime_from_settings(
     use_real_model: bool = True,
     use_real_memory: bool = True,
     use_docker_sandbox: bool = True,
+    use_procrastinate: bool = True,
     run_timeout_seconds: float | None = None,
 ) -> AssistantRuntime:
     """Compose a fully-wired AssistantRuntime for production-ish use.
@@ -140,6 +141,14 @@ def make_runtime_from_settings(
 
     model_factory = make_fireworks_model_factory(settings) if use_real_model else None
 
+    # Procrastinate defer is wired in by default; tests / inject-email --follow
+    # disable it (`use_procrastinate=False`) and call execute_run directly.
+    run_agent_defer = None
+    if use_procrastinate:
+        from email_agent.jobs.app import defer_run_agent
+
+        run_agent_defer = defer_run_agent
+
     return AssistantRuntime(
         session_factory,
         attachments_root=settings.attachments_root,
@@ -150,6 +159,7 @@ def make_runtime_from_settings(
         projector=projector,
         model_factory=model_factory,
         run_timeout_seconds=run_timeout_seconds,
+        run_agent_defer=run_agent_defer,
     )
 
 
@@ -166,6 +176,8 @@ def make_runtime_for_inject(
     Always uses InMemoryEmailProvider so a fixture-driven local run never
     accidentally sends real Mailgun mail. The caller can inspect
     `email_provider.sent` after the run to see what would have gone out.
+    Procrastinate is disabled — `inject-email --follow` calls execute_run
+    directly to keep the dev loop tight (no worker process needed).
     """
     from email_agent.mail.inmemory import InMemoryEmailProvider
 
@@ -174,6 +186,7 @@ def make_runtime_for_inject(
         settings,
         session_factory,
         email_provider=email_provider,
+        use_procrastinate=False,
         use_real_model=use_real_model,
         use_real_memory=use_real_memory,
         use_docker_sandbox=use_docker_sandbox,
