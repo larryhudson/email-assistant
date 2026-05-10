@@ -42,6 +42,12 @@ def inject_email(
         "--docker/--in-memory",
         help="Use the docker sandbox (default) or the in-memory one (subprocess on host).",
     ),
+    use_real_memory: bool = typer.Option(
+        True,
+        "--cognee-memory/--in-memory-memory",
+        help="Use Cognee for durable memory (requires COGNEE_*_API_KEY). "
+        "Disable for offline iteration without an embedding API key.",
+    ),
 ) -> None:
     """Inject a `.eml` fixture into the runtime — fixture-driven local dev.
 
@@ -58,6 +64,7 @@ def inject_email(
             follow=follow,
             use_real_model=use_real_model,
             use_docker_sandbox=use_docker_sandbox,
+            use_real_memory=use_real_memory,
         )
     )
 
@@ -69,6 +76,7 @@ async def _inject_email(
     follow: bool,
     use_real_model: bool,
     use_docker_sandbox: bool,
+    use_real_memory: bool,
 ) -> None:
     from sqlalchemy import select
 
@@ -100,6 +108,7 @@ async def _inject_email(
         session_factory,
         use_real_model=use_real_model,
         use_docker_sandbox=use_docker_sandbox,
+        use_real_memory=use_real_memory,
     )
 
     accept = await runtime.accept_inbound(email)
