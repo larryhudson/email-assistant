@@ -1,8 +1,11 @@
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from email_agent.db.models import AgentRun
 from email_agent.domain.inbound_persister import persist_inbound
 from email_agent.domain.router import (
     AssistantRouter,
@@ -72,6 +75,12 @@ class AssistantRuntime:
                 thread=attached_thread,
                 attachments_root=self._attachments_root,
             )
+            await _ensure_queued_run(
+                session,
+                assistant_id=scope.assistant_id,
+                thread_id=attached_thread.id,
+                inbound_message_id=persisted.message.id,
+            )
             await session.commit()
             return Accepted(
                 assistant_id=scope.assistant_id,
@@ -79,3 +88,37 @@ class AssistantRuntime:
                 message_id=persisted.message.id,
                 created=persisted.created,
             )
+
+
+async def _ensure_queued_run(
+    session: AsyncSession,
+    *,
+    assistant_id: str,
+    thread_id: str,
+    inbound_message_id: str,
+) -> AgentRun:
+    """Idempotent AgentRun(status='queued') row keyed on inbound_message_id.
+
+    No DB-level unique constraint here yet — query-then-insert is good enough
+    for the webhook fast path because each inbound message id is unique on
+    `(assistant_id, provider_message_id)` upstream, and duplicate deliveries
+    short-circuit before this point in `persist_inbound`.
+    """
+    existing = (
+        await session.execute(
+            select(AgentRun).where(AgentRun.inbound_message_id == inbound_message_id)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    run = AgentRun(
+        id=f"r-{uuid.uuid4().hex[:8]}",
+        assistant_id=assistant_id,
+        thread_id=thread_id,
+        inbound_message_id=inbound_message_id,
+        status="queued",
+    )
+    session.add(run)
+    await session.flush()
+    return run

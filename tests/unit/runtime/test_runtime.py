@@ -140,3 +140,34 @@ async def test_accept_inbound_is_idempotent_on_duplicate_delivery(
     async with sqlite_session_factory() as session:
         messages = (await session.execute(select(EmailMessage))).scalars().all()
         assert len(messages) == 1
+
+
+async def test_accept_inbound_writes_agent_run_queued(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    from email_agent.db.models import AgentRun
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    runtime = AssistantRuntime(sqlite_session_factory, attachments_root=tmp_path)
+    first = await runtime.accept_inbound(_inbound())
+    assert isinstance(first, Accepted)
+
+    async with sqlite_session_factory() as session:
+        runs = (await session.execute(select(AgentRun))).scalars().all()
+        assert len(runs) == 1
+        run = runs[0]
+        assert run.assistant_id == "a-1"
+        assert run.thread_id == first.thread_id
+        assert run.inbound_message_id == first.message_id
+        assert run.status == "queued"
+
+    # Duplicate delivery → still one AgentRun row.
+    second = await runtime.accept_inbound(_inbound())
+    assert isinstance(second, Accepted)
+
+    async with sqlite_session_factory() as session:
+        runs = (await session.execute(select(AgentRun))).scalars().all()
+        assert len(runs) == 1
