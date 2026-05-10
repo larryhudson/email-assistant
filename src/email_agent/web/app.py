@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request, Response
 from starlette.datastructures import UploadFile
 
 if TYPE_CHECKING:
+    from procrastinate import App as ProcrastinateApp
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from email_agent.mail.mailgun import (
@@ -48,9 +49,18 @@ log = logging.getLogger("email_agent.web")
 
 
 def build_app_from_settings() -> FastAPI:
-    """Compose the production app from environment-backed settings."""
+    """Compose the production app from environment-backed settings.
+
+    The webhook fast path only needs `accept_inbound`, so we construct a
+    lightweight runtime (no sandbox, no agent, no model factory) — those
+    are the worker's concern, set up in `jobs.app:build_worker_deps`. We
+    DO wire `run_agent_defer` so accept_inbound enqueues a procrastinate
+    job for the worker to pick up.
+    """
     from email_agent.config import Settings
     from email_agent.db.session import make_engine, make_session_factory
+    from email_agent.jobs.app import app as procrastinate_app
+    from email_agent.jobs.app import defer_run_agent
 
     settings = Settings()  # ty: ignore[missing-argument]
     engine = make_engine(settings)
@@ -58,9 +68,18 @@ def build_app_from_settings() -> FastAPI:
     provider = MailgunEmailProvider(
         signing_key=settings.mailgun_signing_key.get_secret_value(),
     )
-    runtime = AssistantRuntime(factory, attachments_root=settings.attachments_root)
+    runtime = AssistantRuntime(
+        factory,
+        attachments_root=settings.attachments_root,
+        run_agent_defer=defer_run_agent,
+    )
     settings.attachments_root.mkdir(parents=True, exist_ok=True)
-    return build_app(provider=provider, runtime=runtime, session_factory=factory)
+    return build_app(
+        provider=provider,
+        runtime=runtime,
+        session_factory=factory,
+        procrastinate_app=procrastinate_app,
+    )
 
 
 def build_app(
@@ -68,13 +87,27 @@ def build_app(
     provider: MailgunEmailProvider,
     runtime: AssistantRuntime,
     session_factory: "async_sessionmaker[AsyncSession] | None" = None,
+    procrastinate_app: "ProcrastinateApp | None" = None,
 ) -> FastAPI:
     """Build the FastAPI app with its handler dependencies wired in.
 
     `provider` and `runtime` are injected so tests can swap them out.
     `session_factory`, when provided, mounts the admin router at /admin.
+    `procrastinate_app`, when provided, is opened on startup + closed on
+    shutdown via FastAPI's lifespan so accept_inbound's defer call has
+    a live connection pool to enqueue against.
     """
-    app = FastAPI(title="email-assistant")
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        if procrastinate_app is not None:
+            async with procrastinate_app.open_async():
+                yield
+        else:
+            yield
+
+    app = FastAPI(title="email-assistant", lifespan=lifespan)
 
     if session_factory is not None:
         from email_agent.web.admin.router import mount_admin
