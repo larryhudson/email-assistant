@@ -76,3 +76,70 @@ async def test_ensure_started_is_idempotent(sandbox, assistant_id):
     same_container = client.containers.get(f"email-agent-sandbox-{assistant_id}")
     assert same_container.id == container_id
     assert same_container.status == "running"
+
+
+async def test_project_emails_writes_files_into_workspace(sandbox, assistant_id):
+    from email_agent.models.sandbox import ProjectedFile
+
+    await sandbox.ensure_started(assistant_id)
+    await sandbox.project_emails(
+        assistant_id,
+        [
+            ProjectedFile(path="emails/t-1/thread.md", content=b"# thread"),
+            ProjectedFile(path="emails/t-1/0001-msg.md", content=b"hello"),
+        ],
+    )
+
+    import docker
+
+    client = docker.from_env()
+    container = client.containers.get(f"email-agent-sandbox-{assistant_id}")
+    code, out = container.exec_run(["cat", "/workspace/emails/t-1/thread.md"])
+    assert code == 0
+    assert out == b"# thread"
+    code, out = container.exec_run(["cat", "/workspace/emails/t-1/0001-msg.md"])
+    assert code == 0
+    assert out == b"hello"
+
+
+async def test_project_emails_wipes_previous_projection(sandbox, assistant_id):
+    from email_agent.models.sandbox import ProjectedFile
+
+    await sandbox.ensure_started(assistant_id)
+    await sandbox.project_emails(
+        assistant_id,
+        [ProjectedFile(path="emails/t-1/old.md", content=b"old")],
+    )
+    await sandbox.project_emails(
+        assistant_id,
+        [ProjectedFile(path="emails/t-2/new.md", content=b"new")],
+    )
+
+    import docker
+
+    client = docker.from_env()
+    container = client.containers.get(f"email-agent-sandbox-{assistant_id}")
+    code, _ = container.exec_run(["test", "-f", "/workspace/emails/t-1/old.md"])
+    assert code != 0
+    code, out = container.exec_run(["cat", "/workspace/emails/t-2/new.md"])
+    assert code == 0
+    assert out == b"new"
+
+
+async def test_project_attachments_lands_under_run_dir(sandbox, assistant_id):
+    from email_agent.models.sandbox import ProjectedFile
+
+    await sandbox.ensure_started(assistant_id)
+    await sandbox.project_attachments(
+        assistant_id,
+        "r-1",
+        [ProjectedFile(path="report.pdf", content=b"%PDF-1.7")],
+    )
+
+    import docker
+
+    client = docker.from_env()
+    container = client.containers.get(f"email-agent-sandbox-{assistant_id}")
+    code, out = container.exec_run(["cat", "/workspace/attachments/r-1/report.pdf"])
+    assert code == 0
+    assert out == b"%PDF-1.7"

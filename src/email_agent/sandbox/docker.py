@@ -1,6 +1,11 @@
 import asyncio
-from pathlib import Path
+import io
+import tarfile
+import time
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
+
+from email_agent.models.sandbox import ProjectedFile
 
 if TYPE_CHECKING:
     from docker.models.containers import Container
@@ -9,6 +14,8 @@ if TYPE_CHECKING:
 
 
 CONTAINER_NAME_PREFIX = "email-agent-sandbox-"
+WORKSPACE_ROOT = "/workspace"
+EMAILS_DIR = "/workspace/emails"
 
 
 class DockerSandbox:
@@ -79,6 +86,53 @@ class DockerSandbox:
 
     def _container_name(self, assistant_id: str) -> str:
         return f"{CONTAINER_NAME_PREFIX}{assistant_id}"
+
+    def _container(self, assistant_id: str) -> "Container":
+        return self._client.containers.get(self._container_name(assistant_id))
+
+    async def project_emails(self, assistant_id: str, files: list[ProjectedFile]) -> None:
+        await asyncio.to_thread(self._project_emails_sync, assistant_id, files)
+
+    def _project_emails_sync(self, assistant_id: str, files: list[ProjectedFile]) -> None:
+        container = self._container(assistant_id)
+        # Wipe previous projection so deleted threads don't linger.
+        container.exec_run(["rm", "-rf", EMAILS_DIR])
+        container.exec_run(["mkdir", "-p", EMAILS_DIR])
+        if files:
+            self._put_files(container, root=WORKSPACE_ROOT, files=files)
+
+    async def project_attachments(
+        self, assistant_id: str, run_id: str, files: list[ProjectedFile]
+    ) -> None:
+        await asyncio.to_thread(self._project_attachments_sync, assistant_id, run_id, files)
+
+    def _project_attachments_sync(
+        self, assistant_id: str, run_id: str, files: list[ProjectedFile]
+    ) -> None:
+        container = self._container(assistant_id)
+        run_root = f"{WORKSPACE_ROOT}/attachments/{run_id}"
+        container.exec_run(["rm", "-rf", run_root])
+        container.exec_run(["mkdir", "-p", run_root])
+        if files:
+            self._put_files(container, root=run_root, files=files)
+
+    @staticmethod
+    def _put_files(container: "Container", *, root: str, files: list[ProjectedFile]) -> None:
+        # Build a tar stream and put_archive into <root>.
+        buf = io.BytesIO()
+        now = int(time.time())
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            for projected in files:
+                rel_path = str(PurePosixPath(projected.path)).lstrip("/")
+                info = tarfile.TarInfo(name=rel_path)
+                info.size = len(projected.content)
+                info.mtime = now
+                info.mode = 0o644
+                tar.addfile(info, io.BytesIO(projected.content))
+        buf.seek(0)
+        ok = container.put_archive(path=root, data=buf.getvalue())
+        if not ok:
+            raise RuntimeError(f"put_archive into {root} failed")
 
 
 __all__ = ["DockerSandbox"]
