@@ -134,6 +134,37 @@ async def test_mailgun_webhook_returns_200_for_dropped_inbound(
         assert rows == []
 
 
+async def test_mailgun_webhook_captures_multipart_attachments(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    async with sqlite_session_factory() as session:
+        await _seed(session)
+
+    provider = MailgunEmailProvider(signing_key=SIGNING_KEY)
+    runtime = AssistantRuntime(sqlite_session_factory, attachments_root=tmp_path)
+    app = build_app(provider=provider, runtime=runtime)
+
+    form = _signed_form(
+        recipient="mum@assistants.example.com",
+        sender="mum@example.com",
+    )
+    files = {"attachment-1": ("note.txt", b"hello", "text/plain")}
+
+    with TestClient(app) as client:
+        response = client.post("/webhooks/mailgun", data=form, files=files)
+    assert response.status_code == 200
+
+    from email_agent.db.models import EmailAttachmentRow
+
+    async with sqlite_session_factory() as session:
+        rows = (await session.execute(select(EmailAttachmentRow))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].filename == "note.txt"
+    assert rows[0].content_type == "text/plain"
+    assert rows[0].size_bytes == 5
+
+
 async def test_mailgun_webhook_rejects_bad_signature(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,

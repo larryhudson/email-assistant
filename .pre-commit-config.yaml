@@ -1,5 +1,6 @@
-# Fast checks on every commit; tests on push (slower).
-default_install_hook_types: [pre-commit, pre-push]
+# Lint, types, and unit tests run on every commit. (Integration tests need
+# Postgres so they stay out of the commit hook.)
+default_install_hook_types: [pre-commit]
 
 repos:
   - repo: local
@@ -31,4 +32,3 @@ repos:
         language: system
         pass_filenames: false
         types: [python]
-        stages: [pre-push]
