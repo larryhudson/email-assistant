@@ -303,6 +303,19 @@ async def test_execute_run_injects_recalled_memory_into_prompt(
     assert a_id == "a-1"
     assert "please reply" in query
 
+    # Recalled memories were persisted to RunMemoryRecall so the admin
+    # UI can show the agent exactly what context it had.
+    from email_agent.db.models import RunMemoryRecall
+
+    async with sqlite_session_factory() as session:
+        rows = (
+            (await session.execute(select(RunMemoryRecall).where(RunMemoryRecall.run_id == run_id)))
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 1
+        assert rows[0].content == "REMEMBERED-FACT-XYZ: prior context for the agent."
+
 
 async def test_execute_run_sends_template_when_budget_exceeded(
     sqlite_session_factory: async_sessionmaker[AsyncSession],

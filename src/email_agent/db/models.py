@@ -221,6 +221,25 @@ class RunStep(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class RunMemoryRecall(Base):
+    """One memory chunk that was injected into an agent run's prompt.
+
+    Persisted by the runtime immediately after `MemoryPort.recall(...)`
+    so the admin trace view can show what context the agent actually
+    saw — re-running recall later isn't faithful (memory may have grown).
+    No wire counterpart.
+    """
+
+    __tablename__ = "run_memory_recalls"
+
+    id: Mapped[str] = _str_pk()
+    run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"))
+    memory_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content: Mapped[str] = mapped_column(Text)
+    score: Mapped[float | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class UsageLedger(Base):
     """Token + cost record per run, per provider/model.
 
