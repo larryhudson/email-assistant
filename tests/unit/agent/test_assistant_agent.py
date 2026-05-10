@@ -177,3 +177,33 @@ async def test_bash_tool_routes_through_sandbox() -> None:
         result = await agent.run(_scope(), prompt="please bash", deps=deps)
 
     assert "hello" in result.body
+
+
+async def test_memory_search_bypasses_sandbox() -> None:
+    sandbox = InMemorySandbox()
+    memory = InMemoryMemoryAdapter()
+    await sandbox.ensure_started("a-1")
+    await memory.record_turn("a-1", "t-1", "user", "project alpha kicks off Monday")
+    await memory.record_turn("a-1", "t-1", "user", "project alpha needs a budget")
+    await memory.record_turn("a-1", "t-1", "user", "different topic")
+
+    agent = AssistantAgent()
+    deps = AgentDeps(
+        assistant_id="a-1",
+        run_id="r-1",
+        thread_id="t-1",
+        sandbox=sandbox,
+        memory=memory,
+        pending_attachments=[],
+    )
+
+    with agent.override_model(
+        _scope(),
+        _call_then_echo("memory_search", {"query": "project alpha"}),
+    ):
+        result = await agent.run(_scope(), prompt="search", deps=deps)
+
+    # Both alpha memories appear in the echoed body.
+    assert "kicks off Monday" in result.body
+    assert "needs a budget" in result.body
+    assert "different topic" not in result.body
