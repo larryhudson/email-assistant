@@ -15,7 +15,7 @@ from email_agent.agent.pricing import estimate_cost_usd
 from email_agent.models.agent import AgentDeps, AgentResult, RunStepRecord, RunUsage
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.memory import Memory
-from email_agent.models.sandbox import BashResult, PendingAttachment, ToolCall
+from email_agent.models.sandbox import BashResult, PendingAttachment, ToolCall, ToolResult
 
 
 class AssistantAgent:
@@ -60,7 +60,7 @@ class AssistantAgent:
                 ToolCall(kind="read", path=path),
             )
             if not result.ok:
-                raise RuntimeError(result.error or f"read({path}) failed")
+                return _tool_error("read", result, detail=path)
             assert isinstance(result.output, str)
             return result.output
 
@@ -73,7 +73,7 @@ class AssistantAgent:
                 ToolCall(kind="write", path=path, content=content),
             )
             if not result.ok:
-                raise RuntimeError(result.error or f"write({path}) failed")
+                return _tool_error("write", result, detail=path)
             return f"wrote {path}"
 
         @agent.tool
@@ -85,7 +85,7 @@ class AssistantAgent:
                 ToolCall(kind="edit", path=path, old=old, new=new),
             )
             if not result.ok:
-                raise RuntimeError(result.error or f"edit({path}) failed")
+                return _tool_error("edit", result, detail=path)
             return f"edited {path}"
 
         @agent.tool
@@ -104,7 +104,7 @@ class AssistantAgent:
                 ToolCall(kind="attach_file", path=path),
             )
             if not check.ok:
-                raise RuntimeError(check.error or f"attach_file({path}) failed")
+                return _tool_error("attach_file", check, detail=path)
             ctx.deps.pending_attachments.append(
                 PendingAttachment(
                     sandbox_path=path,
@@ -133,7 +133,7 @@ class AssistantAgent:
                     f"stderr:\n{result.output.stderr}"
                 )
             if not result.ok:
-                raise RuntimeError(result.error or "bash failed")
+                return _tool_error("bash", result, detail=command)
             return ""
 
         return agent
@@ -225,6 +225,11 @@ def _stringify(value: object) -> str:
         except TypeError:
             return repr(value)
     return repr(value)
+
+
+def _tool_error(tool_name: str, result: ToolResult, *, detail: str | None = None) -> str:
+    subject = f"{tool_name}({detail})" if detail else tool_name
+    return f"ERROR: {subject} failed\n{result.error or 'unknown error'}"
 
 
 def _truncate(s: str, limit: int = 500) -> str:

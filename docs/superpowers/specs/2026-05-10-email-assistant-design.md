@@ -545,7 +545,7 @@ Trade-off: docker-socket access is effectively host-root. Acceptable for a singl
 
 Two complementary paths:
 
-- **cloudflared quick tunnel** (`cloudflared tunnel --url http://localhost:8000`) for end-to-end testing against real Mailgun. Restart = new URL; fine for ad-hoc work. Promote to a named tunnel later if it becomes annoying.
+- **Tailscale Funnel** for end-to-end testing against real Mailgun. This is machine-level setup, not part of the Hivemind process stack.
 - **`email-assistant inject-email <fixture.eml> --to <inbound-address>` CLI** for the 90% of dev that doesn't need real Mailgun. Parses an `.eml`, constructs a `NormalizedInboundEmail` directly, and calls `runtime.accept_inbound`. Fixtures under `tests/fixtures/emails/`.
 
 A `docker-compose.dev.yml` provides hot-reload (`uvicorn --reload`) and a worker with auto-restart.

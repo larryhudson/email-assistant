@@ -60,3 +60,5 @@ class Settings(BaseSettings):
 
     admin_bind_host: str = "127.0.0.1"
     admin_bind_port: int = 8001
+    admin_basic_auth_username: str | None = None
+    admin_basic_auth_password: SecretStr | None = None

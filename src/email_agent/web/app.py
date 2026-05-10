@@ -1,6 +1,8 @@
 import base64
+import binascii
 import json
 import logging
+import secrets
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request, Response
@@ -79,6 +81,13 @@ def build_app_from_settings() -> FastAPI:
         runtime=runtime,
         session_factory=factory,
         procrastinate_app=procrastinate_app,
+        admin_basic_auth_username=settings.admin_basic_auth_username,
+        admin_basic_auth_password=(
+            settings.admin_basic_auth_password.get_secret_value()
+            if settings.admin_basic_auth_password is not None
+            else None
+        ),
+        admin_auth_required=True,
     )
 
 
@@ -88,6 +97,9 @@ def build_app(
     runtime: AssistantRuntime,
     session_factory: "async_sessionmaker[AsyncSession] | None" = None,
     procrastinate_app: "ProcrastinateApp | None" = None,
+    admin_basic_auth_username: str | None = None,
+    admin_basic_auth_password: str | None = None,
+    admin_auth_required: bool = False,
 ) -> FastAPI:
     """Build the FastAPI app with its handler dependencies wired in.
 
@@ -112,6 +124,12 @@ def build_app(
     if session_factory is not None:
         from email_agent.web.admin.router import mount_admin
 
+        _protect_admin(
+            app,
+            username=admin_basic_auth_username,
+            password=admin_basic_auth_password,
+            required=admin_auth_required,
+        )
         mount_admin(app, session_factory)
 
     @app.post("/webhooks/mailgun")
@@ -170,6 +188,58 @@ def build_app(
         return Response(status_code=200)
 
     return app
+
+
+def _protect_admin(
+    app: FastAPI,
+    *,
+    username: str | None,
+    password: str | None,
+    required: bool,
+) -> None:
+    if not required and (not username or not password):
+        return
+
+    @app.middleware("http")
+    async def admin_basic_auth(request: Request, call_next):
+        if not request.url.path.startswith("/admin"):
+            return await call_next(request)
+
+        if not username or not password:
+            return Response("Admin auth is not configured\n", status_code=503)
+
+        supplied_username, supplied_password = _parse_basic_auth(
+            request.headers.get("authorization")
+        )
+        if (
+            supplied_username is not None
+            and supplied_password is not None
+            and secrets.compare_digest(supplied_username, username)
+            and secrets.compare_digest(supplied_password, password)
+        ):
+            return await call_next(request)
+
+        return Response(
+            "Authentication required\n",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="email-assistant admin"'},
+        )
+
+
+def _parse_basic_auth(header: str | None) -> tuple[str | None, str | None]:
+    if header is None:
+        return None, None
+    scheme, _, encoded = header.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return None, None
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return None, None
+    username, separator, password = decoded.partition(":")
+    if not separator:
+        return None, None
+    return username, password
 
 
 async def _normalize_mailgun_form(form) -> dict[str, str]:

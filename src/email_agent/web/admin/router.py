@@ -2,8 +2,8 @@
 
 `make_admin_router(session_factory)` returns an `APIRouter` ready to be
 mounted under `/admin` on the main FastAPI app. All routes are server-
-rendered HTML against `templates/`. Auth is deliberately absent in MVP;
-deployments must bind the web process to a private interface.
+rendered HTML against `templates/`. The parent app protects `/admin` with
+Basic Auth when built from environment-backed settings.
 """
 
 from __future__ import annotations
