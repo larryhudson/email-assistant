@@ -26,6 +26,7 @@ The README confirmed the current top-level API is `cognee.remember`, `cognee.rec
 - `@cognee.agent_memory` decorator on the agent loop (separate change, doesn't touch the port).
 - Procrastinate `curate_memory` job (slice 7 — this slice exposes the right adapter shape so slice 7 can call it).
 - Re-running every existing test against `CogneeMemoryAdapter`. The contract is enforced by the existing `InMemoryMemoryAdapter` tests + one integration round-trip.
+- **Write-side agent tool (`remember`, `save_fact`, etc).** The agent has `memory_search` only. Memory writes are auto-curated *after* the run completes — `curate_memory` + Cognee session traces see the whole turn (final reply, tool outputs, errors) and pick durable facts from that. Letting the agent decide mid-run what to persist is less reliable: it pollutes durable memory with whatever the model felt like saving on a given turn, and it duplicates the curation pipeline. The read/write asymmetry is intentional.
 
 ## File structure
 
@@ -69,15 +70,7 @@ Red: store under `a-1` and `a-2`, call `delete_assistant("a-1")`, assert `search
 
 Green: prefer `cognee.forget(...)` if there's a dataset-scoped form; fall back to `shutil.rmtree(per_assistant_root)` under the lock.
 
-### Task 5a — `remember` agent tool
-
-The agent currently has `memory_search` (read-side) but no write-side counterpart. Add a `remember(content: str)` PydanticAI tool on `AssistantAgent` that calls `ctx.deps.memory.record_turn(assistant_id, thread_id, role="agent_memory", content=content)`. Lets the agent deliberately persist a fact mid-run.
-
-Red: a `FunctionModel`-driven unit test that scripts the agent to call `remember("Mum prefers detailed explanations")`, then asserts the in-memory adapter has that content stored under `(assistant_id, thread_id)`.
-
-Green: add the tool in `assistant_agent.py` next to `memory_search`.
-
-### Task 5b — Wire into production composition
+### Task 5 — Wire into production composition
 
 Red: a unit test asserting `composition.build_production_runtime(...)` (or the equivalent helper) returns a runtime whose `MemoryPort` is a `CogneeMemoryAdapter` instance with the configured data root.
 
