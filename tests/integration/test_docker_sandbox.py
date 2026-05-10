@@ -143,3 +143,32 @@ async def test_project_attachments_lands_under_run_dir(sandbox, assistant_id):
     code, out = container.exec_run(["cat", "/workspace/attachments/r-1/report.pdf"])
     assert code == 0
     assert out == b"%PDF-1.7"
+
+
+async def test_run_tool_read_returns_file_contents(sandbox, assistant_id):
+    from email_agent.models.sandbox import ProjectedFile, ToolCall
+
+    await sandbox.ensure_started(assistant_id)
+    await sandbox.project_emails(
+        assistant_id,
+        [ProjectedFile(path="emails/t-1/thread.md", content=b"# greetings\n")],
+    )
+
+    result = await sandbox.run_tool(
+        assistant_id,
+        "r-1",
+        ToolCall(kind="read", path="emails/t-1/thread.md"),
+    )
+
+    assert result.ok is True
+    assert result.output == "# greetings\n"
+
+
+async def test_run_tool_read_missing_file_returns_error(sandbox, assistant_id):
+    from email_agent.models.sandbox import ToolCall
+
+    await sandbox.ensure_started(assistant_id)
+    result = await sandbox.run_tool(assistant_id, "r-1", ToolCall(kind="read", path="nope.md"))
+
+    assert result.ok is False
+    assert result.error is not None
