@@ -217,3 +217,66 @@ async def test_execute_run_sends_reply_and_records_completion(
 
         usage_rows = (await session.execute(select(UsageLedger))).scalars().all()
         assert len(usage_rows) == 1
+
+
+async def test_execute_run_sends_template_when_budget_exceeded(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    from email_agent.db.models import UsageLedger as _UsageLedger
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+        # Pre-stage a usage_ledger row that takes the assistant at-cap.
+        session.add(
+            _UsageLedger(
+                id="u-old",
+                assistant_id="a-1",
+                run_id="seed",
+                provider="seed",
+                model="seed",
+                input_tokens=0,
+                output_tokens=0,
+                cost_cents=1000,
+                budget_period="2026-05",
+                created_at=datetime(2026, 5, 5, tzinfo=UTC),
+            )
+        )
+        # The seed run's UsageLedger references a non-existent run_id; SQLite
+        # doesn't enforce FK by default in our test setup.
+        await session.commit()
+
+    email_provider = InMemoryEmailProvider()
+    sandbox = InMemorySandbox()
+    memory = InMemoryMemoryAdapter()
+    agent = AssistantAgent()
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        sandbox=sandbox,
+        memory=memory,
+        agent=agent,
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    outcome = await runtime.execute_run(run_id)
+
+    from email_agent.runtime.assistant_runtime import BudgetLimited
+
+    assert isinstance(outcome, BudgetLimited)
+
+    # Template body, not a model output — should mention "monthly budget".
+    assert len(email_provider.sent) == 1
+    body = email_provider.sent[0].body_text
+    assert "monthly budget" in body.lower()
+
+    # Sandbox was never touched.
+    assert sandbox._started == set() or "a-1" not in getattr(sandbox, "_started", set())
+
+    # Run marked budget_limited, not completed.
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun).where(AgentRun.id == run_id))).scalar_one()
+        assert run.status == "budget_limited"
