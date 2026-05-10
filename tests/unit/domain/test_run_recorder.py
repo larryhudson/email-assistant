@@ -269,6 +269,57 @@ async def test_record_failure_marks_run_failed(
         assert len(outbound_msgs) == 0
 
 
+async def test_record_completion_calls_curate_memory_defer(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """After commit, RunRecorder should invoke curate_memory_defer with the
+    run's identity so a worker can pick up curate_memory."""
+    async with sqlite_session_factory() as session:
+        run_id, _ = await _seed_run(session, tmp_path=tmp_path)
+
+    deferred: list[dict[str, str]] = []
+
+    async def fake_defer(*, assistant_id: str, thread_id: str, run_id: str) -> None:
+        deferred.append({"assistant_id": assistant_id, "thread_id": thread_id, "run_id": run_id})
+
+    recorder = RunRecorder(sqlite_session_factory, curate_memory_defer=fake_defer)
+    await recorder.record_completion(
+        CompletedRun(
+            run_id=run_id,
+            scope=_scope(),
+            outbound=_outbound(),
+            sent=SentEmail(provider_message_id="prov-out-1", message_id_header="<run-abc@x>"),
+            steps=[],
+            usage=RunUsage(input_tokens=0, output_tokens=0, cost_usd=Decimal("0")),
+        )
+    )
+
+    assert len(deferred) == 1
+    assert deferred[0]["assistant_id"] == "a-1"
+    assert deferred[0]["thread_id"] == "t-1"
+    assert deferred[0]["run_id"] == run_id
+
+
+async def test_record_failure_does_not_call_curate_memory_defer(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """Failed runs have no outbound to curate; the defer should be skipped."""
+    async with sqlite_session_factory() as session:
+        run_id, _ = await _seed_run(session, tmp_path=tmp_path)
+
+    deferred: list[dict] = []
+
+    async def fake_defer(**kwargs) -> None:
+        deferred.append(kwargs)
+
+    recorder = RunRecorder(sqlite_session_factory, curate_memory_defer=fake_defer)
+    await recorder.record_failure(run_id, error="boom")
+
+    assert deferred == []
+
+
 @pytest.mark.parametrize("missing_run_id", ["does-not-exist"])
 async def test_record_completion_raises_when_run_missing(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
