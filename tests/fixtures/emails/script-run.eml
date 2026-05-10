@@ -1,0 +1,13 @@
+From: Larry <larryhudson@hey.com>
+To: rose.assistant@mg.larryhudson.io
+Subject: Quick maths help
+Message-ID: <script-2@larry-fixture>
+Date: Sun, 10 May 2026 13:30:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Hi Rose,
+
+I need to know the sum of squares from 1 to 100. Could you compute it precisely (write a small python script in /workspace/calc.py, run it with `python3 calc.py` via bash, then verify the answer is correct by also running `python3 -c "print(sum(i*i for i in range(1, 101)))"`), and tell me the number?
+
+Thanks!

@@ -1,11 +1,18 @@
 from contextlib import contextmanager
 
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models import Model
 from pydantic_ai.models.test import TestModel
 
 from email_agent.agent.pricing import estimate_cost_usd
-from email_agent.models.agent import AgentDeps, AgentResult, RunUsage
+from email_agent.models.agent import AgentDeps, AgentResult, RunStepRecord, RunUsage
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import BashResult, PendingAttachment, ToolCall
@@ -162,7 +169,66 @@ class AssistantAgent:
                     cache_read_tokens=cache_read_tokens,
                 ),
             ),
+            steps=_extract_steps(result.all_messages()),
         )
+
+
+def _extract_steps(messages: list[ModelMessage]) -> list[RunStepRecord]:
+    """Walk PydanticAI's message history and emit one RunStep per event.
+
+    Order: model text/tool-call parts (in arrival order) followed by their
+    corresponding tool returns. Tool returns are matched to calls by
+    `tool_call_id`. The final assistant text is emitted as a `model` step.
+    """
+    # Build a map of tool_call_id -> ToolReturnPart from request messages.
+    returns: dict[str, ToolReturnPart] = {}
+    for msg in messages:
+        for part in getattr(msg, "parts", []):
+            if isinstance(part, ToolReturnPart):
+                returns[part.tool_call_id] = part
+
+    steps: list[RunStepRecord] = []
+    for msg in messages:
+        if not isinstance(msg, ModelResponse):
+            continue
+        for part in msg.parts:
+            if isinstance(part, ToolCallPart):
+                ret = returns.get(part.tool_call_id)
+                steps.append(
+                    RunStepRecord(
+                        kind=f"tool:{part.tool_name}",
+                        input_summary=_truncate(_stringify(part.args)),
+                        output_summary=(
+                            _truncate(_stringify(ret.content)) if ret else "<no return>"
+                        ),
+                    )
+                )
+            elif isinstance(part, TextPart):
+                steps.append(
+                    RunStepRecord(
+                        kind="model",
+                        input_summary="",
+                        output_summary=_truncate(part.content),
+                    )
+                )
+    return steps
+
+
+def _stringify(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict | list):
+        import json
+
+        try:
+            return json.dumps(value, default=str)
+        except TypeError:
+            return repr(value)
+    return repr(value)
+
+
+def _truncate(s: str, limit: int = 500) -> str:
+    return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
 __all__ = ["AssistantAgent"]

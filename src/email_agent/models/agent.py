@@ -60,6 +60,7 @@ class AgentResult:
 
     body: str
     usage: RunUsage
+    steps: list["RunStepRecord"] = field(default_factory=list)
 
 
 __all__ = [
