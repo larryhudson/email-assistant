@@ -21,6 +21,8 @@ def _str_pk() -> Mapped[str]:
 
 
 class Owner(Base):
+    """Top-level billing/admin tenant. DB-only — no wire counterpart."""
+
     __tablename__ = "owners"
 
     id: Mapped[str] = _str_pk()
@@ -30,6 +32,8 @@ class Owner(Base):
 
 
 class Admin(Base):
+    """Operator who can log in and inspect runs. DB-only — no wire counterpart."""
+
     __tablename__ = "admins"
 
     id: Mapped[str] = _str_pk()
@@ -39,6 +43,8 @@ class Admin(Base):
 
 
 class EndUser(Base):
+    """The person on the other end of an assistant's emails. DB-only."""
+
     __tablename__ = "end_users"
 
     id: Mapped[str] = _str_pk()
@@ -48,6 +54,12 @@ class EndUser(Base):
 
 
 class Assistant(Base):
+    """Persisted shape of an assistant.
+
+    Flattens with `AssistantScopeRow` + `Budget` into `models.assistant.AssistantScope`
+    via the mapper in `domain/router.py` (lands in a later slice).
+    """
+
     __tablename__ = "assistants"
 
     id: Mapped[str] = _str_pk()
@@ -63,6 +75,12 @@ class Assistant(Base):
 
 
 class AssistantScopeRow(Base):
+    """Per-assistant runtime scope (memory namespace, tool allowlist, budget link).
+
+    Joined with `Assistant` + `Budget` to produce `models.assistant.AssistantScope`
+    at the start of every run. `Row` suffix disambiguates from the wire type.
+    """
+
     __tablename__ = "assistant_scopes"
 
     assistant_id: Mapped[str] = mapped_column(ForeignKey("assistants.id"), primary_key=True)
@@ -74,6 +92,12 @@ class AssistantScopeRow(Base):
 
 
 class EmailThread(Base):
+    """A conversation an assistant has with an end user.
+
+    DB-only — threads are inferred from headers by `domain/thread_resolver.py`,
+    not represented on the wire. `EmailMessage` rows reference this.
+    """
+
     __tablename__ = "email_threads"
 
     id: Mapped[str] = _str_pk()
@@ -88,6 +112,16 @@ class EmailThread(Base):
 
 
 class EmailMessage(Base):
+    """Persisted inbound or outbound email.
+
+    Storage form of `models.email.NormalizedInboundEmail` (direction='inbound')
+    and `models.email.NormalizedOutboundEmail` (direction='outbound'). Mapper
+    will live in `domain/run_recorder.py` (later slice).
+
+    `(assistant_id, provider_message_id)` is unique so duplicate webhook
+    deliveries don't double-record.
+    """
+
     __tablename__ = "email_messages"
 
     id: Mapped[str] = _str_pk()
@@ -109,6 +143,12 @@ class EmailMessage(Base):
 
 
 class EmailAttachmentRow(Base):
+    """Persisted form of `models.email.EmailAttachment`.
+
+    Differs from the wire model: stores `storage_path` (file on disk) instead
+    of inline `data: bytes`. Mapper writes the bytes out, then records the path.
+    """
+
     __tablename__ = "email_attachments"
 
     id: Mapped[str] = _str_pk()
@@ -120,6 +160,13 @@ class EmailAttachmentRow(Base):
 
 
 class MessageIndex(Base):
+    """Lookup table for thread resolution by RFC-822 `Message-ID` header.
+
+    Populated for both inbound and outbound messages, scoped per assistant.
+    `domain/thread_resolver.py` reads it to match `In-Reply-To` / `References`
+    against prior messages without scanning `email_messages` end-to-end.
+    """
+
     __tablename__ = "message_index"
 
     assistant_id: Mapped[str] = mapped_column(ForeignKey("assistants.id"), primary_key=True)
@@ -131,6 +178,12 @@ class MessageIndex(Base):
 
 
 class AgentRun(Base):
+    """One agent execution, from inbound email to outbound reply (or failure).
+
+    Operational record — written by `domain/run_recorder.py` on every accepted
+    inbound, including budget-limited and failed runs. Has no wire counterpart.
+    """
+
     __tablename__ = "agent_runs"
 
     id: Mapped[str] = _str_pk()
@@ -147,6 +200,11 @@ class AgentRun(Base):
 
 
 class RunStep(Base):
+    """One step within an `AgentRun` (a tool call, model call, etc.).
+
+    Powers the admin trace view. No wire counterpart; written by `RunRecorder`.
+    """
+
     __tablename__ = "run_steps"
 
     id: Mapped[str] = _str_pk()
@@ -159,6 +217,11 @@ class RunStep(Base):
 
 
 class UsageLedger(Base):
+    """Token + cost record per run, per provider/model.
+
+    Source of truth for `domain/budget_governor.py`. No wire counterpart.
+    """
+
     __tablename__ = "usage_ledger"
 
     id: Mapped[str] = _str_pk()
@@ -174,6 +237,8 @@ class UsageLedger(Base):
 
 
 class Budget(Base):
+    """Monthly spend cap for one assistant. DB-only; surfaced in `AssistantScope`."""
+
     __tablename__ = "budgets"
 
     id: Mapped[str] = _str_pk()
