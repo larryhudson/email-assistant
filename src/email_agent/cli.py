@@ -23,7 +23,7 @@ def migrate() -> None:
 def web(
     host: str = typer.Option("127.0.0.1", help="Bind host"),
     port: int = typer.Option(8000, help="Bind port"),
-    reload: bool = typer.Option(False, help="Auto-reload on file changes"),
+    reload: bool = typer.Option(True, help="Auto-reload on file changes (dev default)"),
 ) -> None:
     """Run the FastAPI app (Mailgun webhook + future admin UI)."""
     import uvicorn
@@ -33,7 +33,9 @@ def web(
         host=host,
         port=port,
         reload=reload,
+        reload_dirs=["src"] if reload else None,
         factory=True,
+        log_config=None,
     )
 
 

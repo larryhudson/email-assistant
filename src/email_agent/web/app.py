@@ -1,6 +1,9 @@
+import base64
+import json
 import logging
 
 from fastapi import FastAPI, Request, Response
+from starlette.datastructures import UploadFile
 
 from email_agent.mail.mailgun import (
     MailgunEmailProvider,
@@ -14,7 +17,30 @@ from email_agent.runtime.assistant_runtime import (
     Dropped,
 )
 
-log = logging.getLogger(__name__)
+
+def _configure_logging() -> None:
+    """Idempotent dev-friendly logging setup.
+
+    Plain stderr handler at INFO with a short timestamp + level + logger name.
+    Idempotent so uvicorn --reload doesn't keep stacking handlers.
+    """
+    root = logging.getLogger()
+    if getattr(root, "_email_agent_configured", False):
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s %(levelname)-5s %(name)s | %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    root._email_agent_configured = True  # ty: ignore[unresolved-attribute]
+
+
+_configure_logging()
+log = logging.getLogger("email_agent.web")
 
 
 def build_app_from_settings() -> FastAPI:
@@ -43,40 +69,84 @@ def build_app(*, provider: MailgunEmailProvider, runtime: AssistantRuntime) -> F
     @app.post("/webhooks/mailgun")
     async def mailgun_webhook(request: Request) -> Response:
         form = await request.form()
+        attachment_count = sum(1 for _, v in form.multi_items() if isinstance(v, UploadFile))
+        normalized_form = await _normalize_mailgun_form(form)
         webhook_request = WebhookRequest(
             headers=dict(request.headers),
             body=b"",
-            form={k: v for k, v in form.items() if isinstance(v, str)},
+            form=normalized_form,
         )
         try:
             await provider.verify_webhook(webhook_request)
-        except MailgunSignatureError:
-            log.warning("mailgun webhook signature rejected")
+        except MailgunSignatureError as exc:
+            log.warning(
+                "signature rejected: %s | form_keys=%s",
+                exc,
+                sorted(webhook_request.form.keys()),
+            )
             return Response(status_code=401)
 
         try:
             email = await provider.parse_inbound(webhook_request)
         except MailgunParseError:
-            log.exception("mailgun webhook parse failed")
+            log.exception("parse failed")
             return Response(status_code=400)
+
+        log.info(
+            "inbound: %s -> %s | subject=%r | message_id=%s | in_reply_to=%s | references=%d | attachments=%d",
+            email.from_email,
+            email.to_emails,
+            email.subject,
+            email.message_id_header,
+            email.in_reply_to_header,
+            len(email.references_headers),
+            attachment_count,
+        )
 
         outcome = await runtime.accept_inbound(email)
         if isinstance(outcome, Dropped):
-            log.info(
-                "inbound dropped",
-                extra={"reason": outcome.reason.value, "detail": outcome.detail},
+            log.warning(
+                "DROPPED reason=%s detail=%s",
+                outcome.reason.value,
+                outcome.detail,
             )
         else:
             assert isinstance(outcome, Accepted)
             log.info(
-                "inbound accepted",
-                extra={
-                    "assistant_id": outcome.assistant_id,
-                    "thread_id": outcome.thread_id,
-                    "message_id": outcome.message_id,
-                    "created": outcome.created,
-                },
+                "ACCEPTED assistant=%s thread=%s message=%s created=%s",
+                outcome.assistant_id,
+                outcome.thread_id,
+                outcome.message_id,
+                outcome.created,
             )
         return Response(status_code=200)
 
     return app
+
+
+async def _normalize_mailgun_form(form) -> dict[str, str]:
+    """Convert a Mailgun route's multipart form into our parser's JSON shape.
+
+    Mailgun delivers attachments as multipart files keyed `attachment-1`,
+    `attachment-2`, …. We read their bytes and stuff them into the `attachments`
+    form field as the inline-base64 JSON list `parse_inbound` already
+    understands. String fields pass through unchanged.
+    """
+    string_fields: dict[str, str] = {}
+    attachments: list[dict[str, str | int]] = []
+    for key, value in form.multi_items():
+        if isinstance(value, UploadFile):
+            data = await value.read()
+            attachments.append(
+                {
+                    "filename": value.filename or key,
+                    "content-type": value.content_type or "application/octet-stream",
+                    "size": len(data),
+                    "content": base64.b64encode(data).decode(),
+                }
+            )
+            continue
+        string_fields[key] = value
+    if attachments:
+        string_fields["attachments"] = json.dumps(attachments)
+    return string_fields
