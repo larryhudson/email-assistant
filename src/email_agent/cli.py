@@ -454,5 +454,35 @@ def seed_memory(
     asyncio.run(_run())
 
 
+@app.command("worker")
+def worker(
+    queues: list[str] | None = typer.Option(
+        None,
+        "--queue",
+        help="Listen only on these queues (repeatable). Default: all queues.",
+    ),
+    wait: bool = typer.Option(
+        True,
+        "--wait/--no-wait",
+        help="Wait indefinitely for new jobs (default). Use --no-wait to drain "
+        "the queue once and exit — useful in tests.",
+    ),
+    concurrency: int = typer.Option(1, "--concurrency", help="Async jobs per worker."),
+) -> None:
+    """Run the Procrastinate worker that dispatches run_agent + curate_memory."""
+
+    async def _run() -> None:
+        from email_agent.jobs.app import app as procrastinate_app
+
+        worker_kwargs: dict[str, object] = {"wait": wait, "concurrency": concurrency}
+        if queues:
+            worker_kwargs["queues"] = queues
+
+        async with procrastinate_app.open_async():
+            await procrastinate_app.run_worker_async(**worker_kwargs)  # ty: ignore[invalid-argument-type]
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     app()
