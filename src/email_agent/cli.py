@@ -48,6 +48,12 @@ def inject_email(
         help="Use Cognee for durable memory (requires COGNEE_*_API_KEY). "
         "Disable for offline iteration without an embedding API key.",
     ),
+    queue: bool = typer.Option(
+        False,
+        "--queue",
+        help="Queue the run as a Procrastinate job instead of executing in-process. "
+        "Requires `email-agent worker` running. Mutually exclusive with --follow.",
+    ),
 ) -> None:
     """Inject a `.eml` fixture into the runtime — fixture-driven local dev.
 
@@ -55,8 +61,12 @@ def inject_email(
     → queue an agent_runs row). With `--follow`: also runs `execute_run`
     synchronously and prints the rendered reply, agent run trace, token
     usage, and where the would-be outbound went (always InMemory — never
-    sends real mail).
+    sends real mail). With `--queue`: enables Procrastinate so accept_inbound
+    enqueues a run_agent job for a separate worker to pick up.
     """
+    if queue and follow:
+        typer.secho("--queue and --follow are mutually exclusive.", fg="red")
+        raise typer.Exit(2)
     asyncio.run(
         _inject_email(
             fixture,
@@ -65,6 +75,7 @@ def inject_email(
             use_real_model=use_real_model,
             use_docker_sandbox=use_docker_sandbox,
             use_real_memory=use_real_memory,
+            queue=queue,
         )
     )
 
@@ -77,10 +88,11 @@ async def _inject_email(
     use_real_model: bool,
     use_docker_sandbox: bool,
     use_real_memory: bool,
+    queue: bool,
 ) -> None:
     from sqlalchemy import select
 
-    from email_agent.composition import make_runtime_for_inject
+    from email_agent.composition import inject_session
     from email_agent.config import Settings
     from email_agent.db.models import AgentRun, RunStep, UsageLedger
     from email_agent.db.session import make_engine, make_session_factory
@@ -103,42 +115,42 @@ async def _inject_email(
 
     typer.echo(f"→ {email.from_email} → {email.to_emails!r}  subject={email.subject!r}")
 
-    runtime, email_provider = make_runtime_for_inject(
+    async with inject_session(
         settings,
         session_factory,
         use_real_model=use_real_model,
         use_docker_sandbox=use_docker_sandbox,
         use_real_memory=use_real_memory,
-    )
+        use_procrastinate=queue,
+    ) as (runtime, email_provider):
+        accept = await runtime.accept_inbound(email)
+        if isinstance(accept, Dropped):
+            typer.secho(f"DROPPED  reason={accept.reason.value}  detail={accept.detail}", fg="red")
+            raise typer.Exit(1)
+        assert isinstance(accept, Accepted)
+        typer.secho(
+            f"ACCEPTED assistant={accept.assistant_id}  thread={accept.thread_id}  "
+            f"message={accept.message_id}  created={accept.created}",
+            fg="green",
+        )
 
-    accept = await runtime.accept_inbound(email)
-    if isinstance(accept, Dropped):
-        typer.secho(f"DROPPED  reason={accept.reason.value}  detail={accept.detail}", fg="red")
-        raise typer.Exit(1)
-    assert isinstance(accept, Accepted)
-    typer.secho(
-        f"ACCEPTED assistant={accept.assistant_id}  thread={accept.thread_id}  "
-        f"message={accept.message_id}  created={accept.created}",
-        fg="green",
-    )
+        if not follow:
+            return
 
-    if not follow:
-        return
+        # Look up the queued AgentRun keyed on this inbound.
+        async with session_factory() as session:
+            run_id = (
+                await session.execute(
+                    select(AgentRun.id).where(AgentRun.inbound_message_id == accept.message_id)
+                )
+            ).scalar_one()
 
-    # Look up the queued AgentRun keyed on this inbound.
-    async with session_factory() as session:
-        run_id = (
-            await session.execute(
-                select(AgentRun.id).where(AgentRun.inbound_message_id == accept.message_id)
-            )
-        ).scalar_one()
-
-    typer.echo(f"\n--- executing run {run_id} ---\n")
-    try:
-        outcome = await runtime.execute_run(run_id)
-    except Exception as exc:
-        typer.secho(f"FAILED   {exc}", fg="red")
-        raise typer.Exit(1) from exc
+        typer.echo(f"\n--- executing run {run_id} ---\n")
+        try:
+            outcome = await runtime.execute_run(run_id)
+        except Exception as exc:
+            typer.secho(f"FAILED   {exc}", fg="red")
+            raise typer.Exit(1) from exc
 
     if isinstance(outcome, Completed):
         typer.secho("COMPLETED", fg="green")

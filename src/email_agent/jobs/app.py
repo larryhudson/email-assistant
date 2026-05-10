@@ -25,8 +25,33 @@ from email_agent.jobs.run_agent import run_agent_impl
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from email_agent.mail.port import EmailProvider
     from email_agent.memory.port import MemoryPort
     from email_agent.runtime.assistant_runtime import AssistantRuntime
+
+
+def _build_email_provider(settings: Settings) -> EmailProvider:
+    """Mailgun in production; InMemory when EMAIL_AGENT_WORKER_DRY_RUN=true.
+
+    Dry-run mode lets a worker exercise the queue → execute → curate loop
+    locally without sending real email. Captured replies are discarded
+    when the worker exits, but the run is still recorded and curate_memory
+    still fires.
+    """
+    import os
+
+    if os.environ.get("EMAIL_AGENT_WORKER_DRY_RUN") == "true":
+        from email_agent.mail.inmemory import InMemoryEmailProvider
+
+        return InMemoryEmailProvider()
+
+    from email_agent.mail.mailgun import MailgunEmailProvider
+
+    return MailgunEmailProvider(
+        signing_key=settings.mailgun_signing_key.get_secret_value(),
+        api_key=settings.mailgun_api_key.get_secret_value(),
+        domain=settings.mailgun_domain,
+    )
 
 
 def make_procrastinate_app(database_url: str) -> App:
@@ -61,7 +86,6 @@ def build_worker_deps() -> _WorkerDeps:
     """
     from email_agent.composition import make_cognee_memory, make_runtime_from_settings
     from email_agent.db.session import make_engine, make_session_factory
-    from email_agent.mail.mailgun import MailgunEmailProvider
 
     settings = _settings()
     engine = make_engine(settings)
@@ -73,11 +97,7 @@ def build_worker_deps() -> _WorkerDeps:
     # cognee root + share the global asyncio.Lock.
     memory = make_cognee_memory(settings)
 
-    email_provider = MailgunEmailProvider(
-        signing_key=settings.mailgun_signing_key.get_secret_value(),
-        api_key=settings.mailgun_api_key.get_secret_value(),
-        domain=settings.mailgun_domain,
-    )
+    email_provider = _build_email_provider(settings)
     runtime = make_runtime_from_settings(
         settings,
         session_factory,
@@ -133,7 +153,9 @@ async def defer_run_agent(*, run_id: str, assistant_id: str) -> None:
 
     Sets `queueing_lock=f"assistant-{assistant_id}"` so concurrent inbounds
     for the same assistant serialize while different assistants run in
-    parallel.
+    parallel. Caller is responsible for opening `app` (workers do it on
+    startup; CLI / webhook entry points wrap the call in
+    `async with app.open_async():`).
     """
     await run_agent.configure(queueing_lock=f"assistant-{assistant_id}").defer_async(run_id=run_id)
 
@@ -142,7 +164,8 @@ async def defer_curate_memory(*, assistant_id: str, thread_id: str, run_id: str)
     """Production `curate_memory_defer` callback for `RunRecorder`.
 
     No queueing_lock — curate jobs are independent of run ordering and
-    cognee adapter holds its own process-wide lock.
+    cognee adapter holds its own process-wide lock. Caller-managed app
+    lifecycle (see `defer_run_agent`).
     """
     await curate_memory.defer_async(assistant_id=assistant_id, thread_id=thread_id, run_id=run_id)
 
