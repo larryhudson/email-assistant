@@ -177,6 +177,194 @@ async def _inject_email(
         )
 
 
+@app.command("seed-assistant")
+def seed_assistant(
+    inbound_address: str = typer.Option(
+        ...,
+        "--inbound-address",
+        help="The address Mailgun routes to this assistant (e.g. rose@mg.example.com).",
+    ),
+    end_user_email: str = typer.Option(
+        ...,
+        "--end-user",
+        help="Email of the person this assistant talks to (the only allowed sender by default).",
+    ),
+    end_user_name: str | None = typer.Option(None, "--end-user-name", help="Display name."),
+    owner_name: str = typer.Option(
+        "Operator", "--owner-name", help="Owner row name (created if missing)."
+    ),
+    monthly_budget_cents: int = typer.Option(
+        1000, "--monthly-budget-cents", help="Monthly cap in cents (default $10)."
+    ),
+    model: str = typer.Option(
+        "accounts/fireworks/models/minimax-m2p7",
+        "--model",
+        help="Model id to record on the assistant row.",
+    ),
+    system_prompt: str | None = typer.Option(
+        None,
+        "--system-prompt",
+        help="System prompt string. Mutually exclusive with --system-prompt-file.",
+    ),
+    system_prompt_file: Path | None = typer.Option(
+        None,
+        "--system-prompt-file",
+        exists=True,
+        readable=True,
+        help="Read the system prompt from this file.",
+    ),
+    allowed_senders: list[str] = typer.Option(
+        None,
+        "--allowed-sender",
+        help="Allowed sender (repeatable). Defaults to [end_user_email].",
+    ),
+    memory_namespace: str | None = typer.Option(
+        None, "--memory-namespace", help="Cognee namespace. Defaults to assistant id."
+    ),
+) -> None:
+    """Idempotent: create owner / end-user / assistant / scope / budget rows.
+
+    Re-running with the same `--inbound-address` is a no-op (prints the
+    existing assistant id). Useful for getting an assistant into the DB
+    so `inject-email` can route to it.
+    """
+    if system_prompt and system_prompt_file:
+        typer.secho("Use --system-prompt OR --system-prompt-file, not both.", fg="red")
+        raise typer.Exit(2)
+    prompt_text = (
+        system_prompt_file.read_text()
+        if system_prompt_file
+        else (system_prompt or "be helpful and concise.")
+    )
+    senders = list(allowed_senders) if allowed_senders else [end_user_email]
+    asyncio.run(
+        _seed_assistant(
+            inbound_address=inbound_address,
+            end_user_email=end_user_email,
+            end_user_name=end_user_name,
+            owner_name=owner_name,
+            monthly_budget_cents=monthly_budget_cents,
+            model=model,
+            system_prompt=prompt_text,
+            allowed_senders=senders,
+            memory_namespace=memory_namespace,
+        )
+    )
+
+
+async def _seed_assistant(
+    *,
+    inbound_address: str,
+    end_user_email: str,
+    end_user_name: str | None,
+    owner_name: str,
+    monthly_budget_cents: int,
+    model: str,
+    system_prompt: str,
+    allowed_senders: list[str],
+    memory_namespace: str | None,
+) -> None:
+    import uuid
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from email_agent.config import Settings
+    from email_agent.db.models import (
+        Assistant,
+        AssistantScopeRow,
+        Budget,
+        EndUser,
+        Owner,
+    )
+    from email_agent.db.session import make_engine, make_session_factory
+
+    settings = Settings()  # ty: ignore[missing-argument]
+    engine = make_engine(settings)
+    session_factory = make_session_factory(engine)
+
+    async with session_factory() as session:
+        # Idempotent on inbound_address.
+        existing = (
+            await session.execute(
+                select(Assistant).where(Assistant.inbound_address == inbound_address)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            typer.secho(
+                f"already seeded: assistant={existing.id}  inbound={inbound_address}",
+                fg="yellow",
+            )
+            return
+
+        owner = (
+            await session.execute(select(Owner).where(Owner.name == owner_name))
+        ).scalar_one_or_none()
+        if owner is None:
+            owner = Owner(id=f"o-{uuid.uuid4().hex[:8]}", name=owner_name)
+            session.add(owner)
+            await session.flush()
+
+        end_user = (
+            await session.execute(select(EndUser).where(EndUser.email == end_user_email))
+        ).scalar_one_or_none()
+        if end_user is None:
+            end_user = EndUser(
+                id=f"u-{uuid.uuid4().hex[:8]}",
+                owner_id=owner.id,
+                email=end_user_email,
+                display_name=end_user_name,
+            )
+            session.add(end_user)
+            await session.flush()
+
+        assistant_id = f"a-{uuid.uuid4().hex[:8]}"
+        budget_id = f"b-{uuid.uuid4().hex[:8]}"
+
+        period_start = datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        # Roll period_resets_at to the first of next month.
+        if period_start.month == 12:
+            period_reset = period_start.replace(year=period_start.year + 1, month=1)
+        else:
+            period_reset = period_start.replace(month=period_start.month + 1)
+
+        session.add(
+            Budget(
+                id=budget_id,
+                assistant_id=assistant_id,
+                monthly_limit_cents=monthly_budget_cents,
+                period_starts_at=period_start,
+                period_resets_at=period_reset,
+            )
+        )
+        session.add(
+            Assistant(
+                id=assistant_id,
+                end_user_id=end_user.id,
+                inbound_address=inbound_address,
+                status="active",
+                allowed_senders=allowed_senders,
+                model=model,
+                system_prompt=system_prompt,
+            )
+        )
+        session.add(
+            AssistantScopeRow(
+                assistant_id=assistant_id,
+                memory_namespace=memory_namespace or assistant_id,
+                tool_allowlist=["read", "write", "edit", "bash", "memory_search", "attach_file"],
+                budget_id=budget_id,
+            )
+        )
+        await session.commit()
+
+    typer.secho(
+        f"seeded: assistant={assistant_id}  owner={owner.id}  end_user={end_user.id}  "
+        f"budget={budget_id} ({monthly_budget_cents}c/mo)",
+        fg="green",
+    )
+
+
 @app.command()
 def migrate() -> None:
     """Run `alembic upgrade head`."""
