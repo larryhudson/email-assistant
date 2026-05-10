@@ -42,7 +42,7 @@ from email_agent.domain.router import (
 from email_agent.domain.run_recorder import CompletedRun, RunRecorder
 from email_agent.domain.thread_resolver import ThreadResolver
 from email_agent.domain.workspace_projector import EmailWorkspaceProjector
-from email_agent.models.agent import AgentDeps, RunStepRecord
+from email_agent.models.agent import AgentDeps
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.email import (
     EmailAttachment,
@@ -308,14 +308,7 @@ class AssistantRuntime:
                 scope=scope,
                 outbound=envelope,
                 sent=sent,
-                steps=[
-                    RunStepRecord(
-                        kind="model",
-                        input_summary=prompt[:200],
-                        output_summary=agent_result.body[:200],
-                        cost_usd=agent_result.usage.cost_usd,
-                    )
-                ],
+                steps=agent_result.steps,
                 usage=agent_result.usage,
             )
         )
