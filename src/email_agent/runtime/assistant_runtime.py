@@ -1,10 +1,14 @@
 import asyncio
+import contextlib
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from pydantic_ai.models import Model
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -140,6 +144,7 @@ class AssistantRuntime:
         message_id_factory: Callable[[], str] | None = None,
         provider_message_id_factory: Callable[[], str] | None = None,
         run_timeout_seconds: float | None = None,
+        model_factory: "Callable[[AssistantScope], Model] | None" = None,
     ) -> None:
         self._session_factory = session_factory
         self._attachments_root = attachments_root
@@ -158,6 +163,7 @@ class AssistantRuntime:
             provider_message_id_factory or _default_provider_message_id_factory
         )
         self._run_timeout_seconds = run_timeout_seconds
+        self._model_factory = model_factory
 
     async def accept_inbound(self, email: NormalizedInboundEmail) -> AcceptOutcome:
         outcome = await self._router.resolve(email)
@@ -247,14 +253,23 @@ class AssistantRuntime:
             f"Use the read tool to read it, then reply with appropriate text."
         )
 
+        # If a model_factory is wired in (production), apply it for the run;
+        # otherwise rely on a test having called agent.override_model itself.
+        model_override = (
+            self._agent.override_model(scope, self._model_factory(scope))
+            if self._model_factory is not None
+            else contextlib.nullcontext()
+        )
+
         try:
-            if self._run_timeout_seconds is not None:
-                agent_result = await asyncio.wait_for(
-                    self._agent.run(scope, prompt=prompt, deps=deps),
-                    timeout=self._run_timeout_seconds,
-                )
-            else:
-                agent_result = await self._agent.run(scope, prompt=prompt, deps=deps)
+            with model_override:
+                if self._run_timeout_seconds is not None:
+                    agent_result = await asyncio.wait_for(
+                        self._agent.run(scope, prompt=prompt, deps=deps),
+                        timeout=self._run_timeout_seconds,
+                    )
+                else:
+                    agent_result = await self._agent.run(scope, prompt=prompt, deps=deps)
         except TimeoutError:
             await self._recorder.record_failure(
                 run_id,
