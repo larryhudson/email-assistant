@@ -41,24 +41,54 @@ The end user only ever sees email. The admin uses a web UI to inspect runs, thre
 
 ## Runtime flow
 
+The agent run is too slow to fit inside Mailgun's webhook timeout, so the flow is split into a fast webhook path and a Procrastinate background job.
+
+### Webhook fast path
+
 ```
 Mailgun webhook
-  → verify signature
-  → parse to NormalizedInboundEmail
-  → AssistantRuntime.run(email):
-      → AssistantRouter.resolve(email)         # rejects unknown/paused/disallowed senders
-      → BudgetGovernor.decide(scope)           # allow | budget_limit_reply
-      → ThreadResolver.resolve(email, scope)
-      → EmailWorkspaceProjector.project(thread)  # writes /workspace/emails/ in sandbox
-      → MemoryPort.recall(assistant_id, thread_id, query)
-      → AssistantAgent.run(scope, thread, memory_context, sandbox)
-      → ReplyEnvelopeBuilder.build(inbound, thread, body, attachments)
-      → EmailProvider.send_reply(envelope)
-      → RunRecorder.record(completed_run)      # enqueues memory curation
+  → EmailProvider.verify_webhook(req)
+  → EmailProvider.parse_inbound(req)            → NormalizedInboundEmail
+  → AssistantRouter.resolve(email)              # unknown address / paused / sender not allowed → 200 + drop
+  → ThreadResolver.resolve(email, scope)
+  → persist inbound message + agent_runs(status="queued")   (atomic, idempotent on provider_message_id)
+  → enqueue Procrastinate job: run_agent(run_id)
   → return 200
 ```
 
-Heavy work (memory curation, embedding) runs in Procrastinate jobs after the reply is sent. The webhook returns 200 as soon as the reply is sent and the run row is durable.
+Routing and sender-allowlist checks happen here so spam and misrouted mail are rejected without DB writes for the agent run. Inbound message persistence is idempotent on `(assistant_id, provider_message_id)` so Mailgun retries don't enqueue duplicate jobs.
+
+### `run_agent` job (Procrastinate worker)
+
+```
+run_agent(run_id):
+  → load agent_run + inbound email + assistant scope
+  → BudgetGovernor.decide(scope, ledger)
+      ├─ BudgetLimitReply → send template via EmailProvider, mark run "budget_limited", done
+      └─ Allow → continue
+  → EmailWorkspaceProjector.project(thread, scope)
+  → AssistantSandbox.ensure_started(assistant_id)
+  → AssistantSandbox.project_attachments(...)
+  → MemoryPort.recall(assistant_id, thread_id, query)
+  → AssistantAgent.run(scope, current_message_path, memory_context, deps)
+  → read pending attachment bytes out of sandbox
+  → ReplyEnvelopeBuilder.build(inbound, thread, body, attachments)
+  → EmailProvider.send_reply(envelope)
+  → RunRecorder.record_completion(run_id, outbound, steps, usage)
+      └─ enqueues curate_memory(assistant_id, thread_id, run_id) job
+```
+
+`AssistantRuntime` is the entry point for this job — it owns the order, error handling, and per-run wall-clock timeout. Agent failures still produce a recorded run with status `failed` and an admin-visible error; whether to send a "something went wrong" reply is a per-assistant policy (default off in MVP).
+
+### Background jobs
+
+| Job | Triggered by | Purpose |
+| --- | --- | --- |
+| `run_agent(run_id)` | webhook | the full agent run, reply, and recording |
+| `curate_memory(assistant_id, thread_id, run_id)` | end of `run_agent` | persist Cognee session traces, extract durable memories |
+| `notify_budget_threshold(assistant_id)` | inside `RunRecorder` when crossing 70% / 100% | email Larry |
+
+Procrastinate handles retries, scheduling, and dead-letter behaviour for these.
 
 ## Modules
 
@@ -238,13 +268,17 @@ Idempotent on `(provider_message_id, assistant_id)` so duplicate webhooks don't 
 
 #### `AssistantRuntime`
 
-Top-level orchestrator. Single entry point:
+Top-level orchestrator with two entry points:
 
 ```python
-async def run(self, email: NormalizedInboundEmail) -> RunOutcome
+async def accept_inbound(self, email: NormalizedInboundEmail) -> AcceptOutcome
+    # webhook fast path: route, persist, enqueue. Returns quickly.
+
+async def execute_run(self, run_id: str) -> RunOutcome
+    # Procrastinate worker entry: budget, project, agent, reply, record.
 ```
 
-Owns the happy-path order, error handling, per-run wall-clock timeout, and guarantees that every accepted email produces a row in `agent_runs` (including failures). Errors during agent execution still produce a recorded run with status `failed` and an admin-visible error.
+Owns the order, error handling, and per-run wall-clock timeout. Guarantees every accepted email produces a row in `agent_runs` (including budget-limited and failed runs). Errors during agent execution produce a recorded run with status `failed` and an admin-visible error; whether to send a fallback reply is a per-assistant policy (default off in MVP).
 
 The webhook handler shrinks to:
 
@@ -253,9 +287,11 @@ The webhook handler shrinks to:
 async def webhook(req: Request):
     await provider.verify_webhook(req)
     email = await provider.parse_inbound(req)
-    await runtime.run(email)
+    await runtime.accept_inbound(email)
     return Response(status_code=200)
 ```
+
+The Procrastinate worker registers `execute_run` as the handler for the `run_agent` job.
 
 ## Data model
 
@@ -342,7 +378,8 @@ Priority tests:
 - `RunRecorder` is idempotent for duplicate provider webhook delivery.
 - `MemoryPort` never returns memory from another assistant (enforced by both adapters).
 - `AssistantSandbox` rejects writes/edits under `/workspace/emails/`.
-- `AssistantRuntime` end-to-end test using `InMemoryEmailProvider`, `InMemoryMemoryAdapter`, `InMemorySandbox`, fake LLM — confirms the full pipeline produces a recorded run, sent reply, and curation job for any inbound.
+- `AssistantRuntime.accept_inbound` enqueues exactly one `run_agent` job per unique `(assistant_id, provider_message_id)` pair, even with duplicate webhook delivery.
+- `AssistantRuntime.execute_run` end-to-end test using `InMemoryEmailProvider`, `InMemoryMemoryAdapter`, `InMemorySandbox`, fake LLM — confirms the full pipeline produces a recorded run, sent reply, and curation job for any queued inbound.
 
 ## Implementation slices
 
