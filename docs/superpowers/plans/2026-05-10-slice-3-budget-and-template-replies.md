@@ -50,17 +50,7 @@ The webhook fast path stays unchanged in this slice — `BudgetGovernor` will be
 
 ---
 
-## Task 1: BudgetDecision types
-
-**Files:** `src/email_agent/domain/budget_governor.py`.
-
-- [ ] **Step 1 (red):** Add `tests/unit/test_budget_governor.py` with one test asserting `Allow` and `BudgetLimitReply` are frozen dataclasses with the expected fields (`Allow()` empty; `BudgetLimitReply(reason, days_until_reset, monthly_limit_cents, spent_cents)`). Run, expect ImportError.
-- [ ] **Step 2 (green):** Create the module with the two frozen dataclasses and a `BudgetDecision = Allow | BudgetLimitReply` union.
-- [ ] **Step 3:** Commit `feat(domain): add BudgetDecision types`.
-
----
-
-## Task 2: BudgetGovernor.decide — under-limit returns Allow
+## Task 1: BudgetGovernor.decide — under-limit returns Allow
 
 **Files:** `src/email_agent/domain/budget_governor.py`, `tests/unit/test_budget_governor.py`.
 
@@ -70,7 +60,7 @@ The webhook fast path stays unchanged in this slice — `BudgetGovernor` will be
 
 ---
 
-## Task 3: BudgetGovernor.decide — at/over limit returns BudgetLimitReply
+## Task 2: BudgetGovernor.decide — at/over limit returns BudgetLimitReply
 
 - [ ] **Step 1 (red):** Add a test where ledger sum equals the cap, asserting `BudgetLimitReply(monthly_limit_cents=1000, spent_cents=1000, days_until_reset=...)`. `days_until_reset` calculated from `Budget.period_resets_at - now`.
 - [ ] **Step 2 (green):** In `decide`, return `BudgetLimitReply` when `spent >= cap`. Inject a `now` callable (default `datetime.now(UTC)`) to make the reset calculation testable.
@@ -79,7 +69,7 @@ The webhook fast path stays unchanged in this slice — `BudgetGovernor` will be
 
 ---
 
-## Task 4: BudgetGovernor.decide — ignores ledger rows outside the active period
+## Task 3: BudgetGovernor.decide — ignores ledger rows outside the active period
 
 - [ ] **Step 1 (red):** Test seeds two ledger rows: one before `period_starts_at`, one inside. Total exceeds cap, but only the in-period row counts (under cap). Assert `Allow`.
 - [ ] **Step 2 (green):** Confirm the WHERE clause already filters by `created_at`. If the sqlite-vs-Postgres timezone behaviour bites, normalize to UTC explicitly.
@@ -87,7 +77,7 @@ The webhook fast path stays unchanged in this slice — `BudgetGovernor` will be
 
 ---
 
-## Task 5: build_budget_limit_reply — pure builder
+## Task 4: build_budget_limit_reply — pure builder
 
 **Files:** `src/email_agent/domain/budget_reply.py`, `tests/unit/test_budget_reply.py`.
 
@@ -105,7 +95,7 @@ The webhook fast path stays unchanged in this slice — `BudgetGovernor` will be
 
 ---
 
-## Task 6: MailgunEmailProvider.send_reply — minimal happy path
+## Task 5: MailgunEmailProvider.send_reply — minimal happy path
 
 **Files:** `src/email_agent/mail/mailgun.py`, `tests/unit/test_mailgun_send_reply.py`.
 
@@ -122,7 +112,7 @@ The webhook fast path stays unchanged in this slice — `BudgetGovernor` will be
 
 ---
 
-## Task 7: MailgunEmailProvider.send_reply — attachments
+## Task 6: MailgunEmailProvider.send_reply — attachments
 
 - [ ] **Step 1 (red):** Test sends a reply with one `EmailAttachment(filename="x.pdf", content_type="application/pdf", data=b"%PDF...")`. Assert the multipart includes a file part named `attachment` with the right filename, content type, and bytes.
 - [ ] **Step 2 (green):** Append each attachment to the multipart `files` list as `("attachment", (filename, data, content_type))`.
@@ -130,7 +120,7 @@ The webhook fast path stays unchanged in this slice — `BudgetGovernor` will be
 
 ---
 
-## Task 8: MailgunEmailProvider.send_reply — error handling
+## Task 7: MailgunEmailProvider.send_reply — error handling
 
 - [ ] **Step 1 (red):** Test returns an HTTP 401 from the mock transport. Assert `send_reply` raises a typed `MailgunSendError` with status code + body excerpt.
 - [ ] **Step 2 (green):** Add `MailgunSendError`. `response.raise_for_status()` wrapped to raise the typed error.
@@ -138,7 +128,7 @@ The webhook fast path stays unchanged in this slice — `BudgetGovernor` will be
 
 ---
 
-## Task 9: Re-run full suite + lint + types
+## Task 8: Re-run full suite + lint + types
 
 - [ ] `uv run pytest -q`
 - [ ] `uv run ruff check`

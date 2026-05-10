@@ -64,3 +64,15 @@ Implementation plans live in `docs/superpowers/plans/`. The current slice is `20
 ## TDD
 
 Red-green-refactor, one failing test at a time. Every task in the plan follows: write failing test → run to confirm failure → minimal implementation → run to confirm pass → commit.
+
+### The failing test must fail for a *behaviour* reason
+
+`ImportError` or `NameError` is not a meaningful red. If the smallest thing that turns the test green is an empty class, an empty function, or a constant return, the test isn't driving behaviour — it's bookkeeping. The green step should be a real implementation choice, not "make the name exist."
+
+A test earns its keep when it exercises behaviour: a function's output for a given input, a branch taken, an interaction with another component. If you can't write a failing assertion that would also fail under a plausible *wrong* implementation, there's no test to write.
+
+### Types and stubs are not TDD tasks
+
+Don't plan a task whose deliverable is "create the type" or "add the protocol." Types fall out for free as the first behaviour test demands them: writing `BudgetGovernor.decide` returning `Allow` forces `Allow` into existence. Skip the type-shape task; let the first real behaviour test be the first red.
+
+Tautological tests (constructing a dataclass and asserting the fields hold what you just passed in, or `isinstance(X(), X)`) are the symptom of this anti-pattern. Trust `dataclass(frozen=True)` and pydantic; let `ty` enforce shape statically.
