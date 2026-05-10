@@ -248,6 +248,22 @@ class AssistantRuntime:
             pending_attachments=[],
         )
 
+        # Pre-call recall once with the inbound body (truncated) as the query.
+        # Reliable beats clever — gives the model prior context without it
+        # having to decide to call memory_search first.
+        recall_query = (inbound_email.body_text or "")[:2000]
+        memory_context = await self._memory.recall(
+            assistant_id=scope.assistant_id,
+            thread_id=thread.id,
+            query=recall_query,
+        )
+        if memory_context.memories:
+            memory_block = "\n\nRecalled memory:\n" + "\n".join(
+                f"- {m.content}" for m in memory_context.memories
+            )
+        else:
+            memory_block = ""
+
         prompt = (
             f"A new inbound email has arrived. Read it from {projection.current_message_path!r} "
             f"using the `read` tool. Your final response (a plain string returned from this run) "
@@ -255,7 +271,7 @@ class AssistantRuntime:
             f"modify anything under emails/ (that directory is the read-only thread history). "
             f"Use `write`/`edit`/`bash` only if you need scratch files under other paths. "
             f"Use `memory_search` to look up prior context. Use `attach_file` only if you "
-            f"genuinely need to attach a generated artefact."
+            f"genuinely need to attach a generated artefact." + memory_block
         )
 
         # If a model_factory is wired in (production), apply it for the run;

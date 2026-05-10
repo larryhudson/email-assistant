@@ -220,6 +220,90 @@ async def test_execute_run_sends_reply_and_records_completion(
         assert len(usage_rows) == 1
 
 
+async def test_execute_run_injects_recalled_memory_into_prompt(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """The runtime must call MemoryPort.recall(assistant_id, thread_id, body) once
+    before the agent runs and inject the returned memories into the prompt, so the
+    model sees prior context without needing to call memory_search itself."""
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from email_agent.models.memory import Memory, MemoryContext
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    class RecordingMemory:
+        def __init__(self) -> None:
+            self.recall_calls: list[tuple[str, str, str]] = []
+
+        async def recall(self, *, assistant_id: str, thread_id: str, query: str) -> MemoryContext:
+            self.recall_calls.append((assistant_id, thread_id, query))
+            return MemoryContext(
+                memories=[
+                    Memory(
+                        id="seed-1",
+                        content="REMEMBERED-FACT-XYZ: prior context for the agent.",
+                    )
+                ],
+                retrieved_at=_dt.now(UTC),
+            )
+
+        async def record_turn(self, *args, **kwargs) -> None:
+            pass
+
+        async def search(self, assistant_id: str, query: str) -> list[Memory]:
+            return []
+
+        async def delete_assistant(self, assistant_id: str) -> None:
+            pass
+
+    email_provider = InMemoryEmailProvider()
+    sandbox = InMemorySandbox()
+    memory = RecordingMemory()
+    agent = AssistantAgent()
+
+    captured_prompts: list[str] = []
+
+    async def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        text = " ".join(
+            part.content
+            for msg in messages
+            for part in getattr(msg, "parts", [])
+            if hasattr(part, "content") and isinstance(part.content, str)
+        )
+        captured_prompts.append(text)
+        return ModelResponse(parts=[TextPart(content="ok")])
+
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        sandbox=sandbox,
+        memory=memory,  # ty: ignore[invalid-argument-type]
+        agent=agent,
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    with agent.override_model(_scope(), FunctionModel(fn)):
+        outcome = await runtime.execute_run(run_id)
+
+    assert isinstance(outcome, Completed)
+    assert captured_prompts, "model was never called"
+    assert any("REMEMBERED-FACT-XYZ" in p for p in captured_prompts), (
+        f"recalled memory not in prompt; saw: {captured_prompts!r}"
+    )
+    # recall was called with the inbound body as the query.
+    assert len(memory.recall_calls) == 1
+    a_id, _t_id, query = memory.recall_calls[0]
+    assert a_id == "a-1"
+    assert "please reply" in query
+
+
 async def test_execute_run_sends_template_when_budget_exceeded(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,
