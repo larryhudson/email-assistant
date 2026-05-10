@@ -7,7 +7,7 @@ from pydantic_ai.models.test import TestModel
 from email_agent.models.agent import AgentDeps, AgentResult, RunUsage
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.memory import Memory
-from email_agent.models.sandbox import BashResult, ToolCall
+from email_agent.models.sandbox import BashResult, PendingAttachment, ToolCall
 
 
 class AssistantAgent:
@@ -79,6 +79,31 @@ class AssistantAgent:
             if not result.ok:
                 raise RuntimeError(result.error or f"edit({path}) failed")
             return f"edited {path}"
+
+        @agent.tool
+        async def attach_file(
+            ctx: RunContext[AgentDeps], path: str, filename: str | None = None
+        ) -> str:
+            """Mark a file in /workspace as an attachment for the outgoing reply.
+
+            Validates the file exists in the sandbox; the runtime reads the
+            bytes back out after the run completes and stitches them into the
+            outbound envelope. `filename` defaults to the basename of `path`.
+            """
+            check = await ctx.deps.sandbox.run_tool(
+                ctx.deps.assistant_id,
+                ctx.deps.run_id,
+                ToolCall(kind="attach_file", path=path),
+            )
+            if not check.ok:
+                raise RuntimeError(check.error or f"attach_file({path}) failed")
+            ctx.deps.pending_attachments.append(
+                PendingAttachment(
+                    sandbox_path=path,
+                    filename=filename or path.rsplit("/", 1)[-1],
+                )
+            )
+            return f"attached {path}"
 
         @agent.tool
         async def memory_search(ctx: RunContext[AgentDeps], query: str) -> list[Memory]:
