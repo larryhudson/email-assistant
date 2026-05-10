@@ -17,22 +17,32 @@ def _thread() -> EmailThread:
     )
 
 
-def _msg(**kw) -> EmailMessage:
+def _msg(
+    *,
+    id: str = "m-1",
+    direction: str = "inbound",
+    message_id_header: str = "<m1@x>",
+    from_email: str = "mum@example.com",
+    to_emails: list[str] | None = None,
+    subject: str = "Question?",
+    body_text: str = "hello",
+    created_at: datetime = datetime(2026, 5, 10, 12, 0, tzinfo=UTC),
+) -> EmailMessage:
     return EmailMessage(
-        id=kw.pop("id", "m-1"),
-        thread_id=kw.pop("thread_id", "t-1"),
-        assistant_id=kw.pop("assistant_id", "a-1"),
-        direction=kw.pop("direction", "inbound"),
-        provider_message_id=kw.pop("provider_message_id", "prov-1"),
-        message_id_header=kw.pop("message_id_header", "<m1@x>"),
-        in_reply_to_header=kw.pop("in_reply_to_header", None),
-        references_headers=kw.pop("references_headers", []),
-        from_email=kw.pop("from_email", "mum@example.com"),
-        to_emails=kw.pop("to_emails", ["mum@assistants.example.com"]),
-        subject=kw.pop("subject", "Question?"),
-        body_text=kw.pop("body_text", "hello"),
-        body_html=kw.pop("body_html", None),
-        created_at=kw.pop("created_at", datetime(2026, 5, 10, 12, 0, tzinfo=UTC)),
+        id=id,
+        thread_id="t-1",
+        assistant_id="a-1",
+        direction=direction,
+        provider_message_id=f"prov-{id}",
+        message_id_header=message_id_header,
+        in_reply_to_header=None,
+        references_headers=[],
+        from_email=from_email,
+        to_emails=to_emails or ["mum@assistants.example.com"],
+        subject=subject,
+        body_text=body_text,
+        body_html=None,
+        created_at=created_at,
     )
 
 
