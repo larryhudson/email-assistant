@@ -249,8 +249,13 @@ class AssistantRuntime:
         )
 
         prompt = (
-            f"You have a new inbound email at {projection.current_message_path!r}. "
-            f"Use the read tool to read it, then reply with appropriate text."
+            f"A new inbound email has arrived. Read it from {projection.current_message_path!r} "
+            f"using the `read` tool. Your final response (a plain string returned from this run) "
+            f"becomes the body of the reply email — do NOT write the reply to disk, and do NOT "
+            f"modify anything under emails/ (that directory is the read-only thread history). "
+            f"Use `write`/`edit`/`bash` only if you need scratch files under other paths. "
+            f"Use `memory_search` to look up prior context. Use `attach_file` only if you "
+            f"genuinely need to attach a generated artefact."
         )
 
         # If a model_factory is wired in (production), apply it for the run;
