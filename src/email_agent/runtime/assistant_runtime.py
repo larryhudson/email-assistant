@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -138,6 +139,7 @@ class AssistantRuntime:
         envelope_builder: ReplyEnvelopeBuilder | None = None,
         message_id_factory: Callable[[], str] | None = None,
         provider_message_id_factory: Callable[[], str] | None = None,
+        run_timeout_seconds: float | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._attachments_root = attachments_root
@@ -155,6 +157,7 @@ class AssistantRuntime:
         self._provider_message_id_factory = (
             provider_message_id_factory or _default_provider_message_id_factory
         )
+        self._run_timeout_seconds = run_timeout_seconds
 
     async def accept_inbound(self, email: NormalizedInboundEmail) -> AcceptOutcome:
         outcome = await self._router.resolve(email)
@@ -245,7 +248,19 @@ class AssistantRuntime:
         )
 
         try:
-            agent_result = await self._agent.run(scope, prompt=prompt, deps=deps)
+            if self._run_timeout_seconds is not None:
+                agent_result = await asyncio.wait_for(
+                    self._agent.run(scope, prompt=prompt, deps=deps),
+                    timeout=self._run_timeout_seconds,
+                )
+            else:
+                agent_result = await self._agent.run(scope, prompt=prompt, deps=deps)
+        except TimeoutError:
+            await self._recorder.record_failure(
+                run_id,
+                error=f"run timed out after {self._run_timeout_seconds}s",
+            )
+            raise
         except Exception as exc:
             await self._recorder.record_failure(run_id, error=str(exc))
             raise
