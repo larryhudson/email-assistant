@@ -106,22 +106,26 @@ def fake_users(monkeypatch: pytest.MonkeyPatch) -> _FakeUserStore:
 
 
 @pytest.mark.asyncio
-async def test_record_turn_creates_user_and_passes_session_id(
+async def test_record_turn_creates_user_and_writes_to_graph(
     fake_cognee: _FakeCognee, fake_users: _FakeUserStore
 ) -> None:
     adapter = CogneeMemoryAdapter()
     await adapter.record_turn("a-1", "t-99", "user", "I love sourdough")
 
     # User was lazily created with the synthetic email scheme.
-    assert fake_users.create_log == ["assistant-a-1@email-agent.local"]
-    user = fake_users["assistant-a-1@email-agent.local"]
+    assert fake_users.create_log == ["assistant-a-1@example.com"]
+    user = fake_users["assistant-a-1@example.com"]
 
     assert len(fake_cognee.remember_calls) == 1
     call = fake_cognee.remember_calls[0]
     assert "sourdough" in call["text"]
-    assert call["text"].startswith("[user]")
-    assert call["session_id"] == "t-99"
+    assert "thread:t-99" in call["text"]
+    assert "role:user" in call["text"]
     assert call["user"] is user
+    # No session_id — write straight to the durable graph because
+    # cognee's session-memory bridge fails on ACLs (it creates a dataset
+    # row but skips the permission grants improve() needs).
+    assert "session_id" not in call
 
 
 @pytest.mark.asyncio
@@ -134,7 +138,7 @@ async def test_user_is_cached_across_calls(
     await adapter.record_turn("a-1", "t-2", "user", "second")
     await adapter.recall("a-1", "t-2", "anything")
 
-    assert fake_users.create_log == ["assistant-a-1@email-agent.local"]
+    assert fake_users.create_log == ["assistant-a-1@example.com"]
 
 
 @pytest.mark.asyncio
@@ -148,7 +152,7 @@ async def test_concurrent_first_touches_create_one_user(
         adapter.record_turn("a-1", "t-2", "user", "y"),
         adapter.record_turn("a-1", "t-3", "user", "z"),
     )
-    assert fake_users.create_log == ["assistant-a-1@email-agent.local"]
+    assert fake_users.create_log == ["assistant-a-1@example.com"]
 
 
 @pytest.mark.asyncio
@@ -169,7 +173,7 @@ async def test_recall_returns_chunks_with_search_result_extracted(
     call = fake_cognee.recall_calls[0]
     assert call["query"] == "what about sourdough"
     assert call["session_id"] == "t-9"
-    assert call["user"] is fake_users["assistant-a-2@email-agent.local"]
+    assert call["user"] is fake_users["assistant-a-2@example.com"]
     assert call["query_type"] == SearchType.CHUNKS
     assert call["only_context"] is True
     assert {m.content for m in ctx.memories} == {"sourdough is great", "user prefers detail"}
@@ -220,8 +224,8 @@ async def test_delete_assistant_drops_user_and_data(
     assert len(fake_cognee.forget_calls) == 1
     forget = fake_cognee.forget_calls[0]
     assert forget["everything"] is True
-    assert forget["user"].email == "assistant-a-1@email-agent.local"
-    assert fake_users.delete_log == ["assistant-a-1@email-agent.local"]
+    assert forget["user"].email == "assistant-a-1@example.com"
+    assert fake_users.delete_log == ["assistant-a-1@example.com"]
     # Cache cleared so a future call re-resolves.
     fake_cognee.recall_returns = []
     await adapter.recall("a-1", "t-1", "anything")
