@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}assistants — email-assistant admin{% endblock %}
+{% block content %}
+<h2>Assistants</h2>
+<table class="data">
+  <thead>
+    <tr>
+      <th>id</th>
+      <th>inbound</th>
+      <th>status</th>
+      <th>model</th>
+      <th>monthly limit</th>
+      <th>spent (this period)</th>
+      <th>last run</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td><code>{{ row.id }}</code></td>
+      <td>{{ row.inbound_address }}</td>
+      <td><span class="status status-{{ row.status }}">{{ row.status }}</span></td>
+      <td><code>{{ row.model }}</code></td>
+      <td>${{ "%.2f"|format(row.monthly_limit) }}</td>
+      <td>${{ "%.4f"|format(row.spent) }}</td>
+      <td>{{ row.last_run_at or "—" }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="empty">No assistants yet. Run <code>email-agent seed-assistant</code>.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

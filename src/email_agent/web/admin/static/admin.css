@@ -1,0 +1,83 @@
+:root {
+  --fg: #1a1a1a;
+  --bg: #fff;
+  --muted: #666;
+  --rule: #ddd;
+  --accent: #2c5fa8;
+  --warn: #d97706;
+  --bad: #b91c1c;
+  --ok: #15803d;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+  margin: 0;
+  line-height: 1.4;
+}
+.topbar {
+  border-bottom: 1px solid var(--rule);
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  align-items: baseline;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+.topbar h1 {
+  font-size: 1rem;
+  margin: 0;
+  font-weight: 600;
+}
+.topbar nav a {
+  color: var(--accent);
+  text-decoration: none;
+  margin-right: 1rem;
+  font-size: 0.9rem;
+}
+.topbar nav a:hover { text-decoration: underline; }
+.auth-note {
+  margin: 0 0 0 auto;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+main { padding: 1.5rem; max-width: 1280px; }
+h2 { margin-top: 0; }
+code { font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 0.9em; }
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+table.data th, table.data td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+table.data th {
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 2px solid var(--rule);
+}
+table.data tr:hover { background: #fafafa; }
+table.data .empty { color: var(--muted); font-style: italic; text-align: center; }
+.status { font-size: 0.8rem; padding: 0.1rem 0.5rem; border-radius: 3px; }
+.status-active { background: #dcfce7; color: var(--ok); }
+.status-completed { background: #dcfce7; color: var(--ok); }
+.status-failed { background: #fee2e2; color: var(--bad); }
+.status-queued { background: #e0e7ff; color: #4338ca; }
+.status-budget_limited { background: #fef3c7; color: var(--warn); }
+.status-paused { background: #f3f4f6; color: var(--muted); }
+.trace-section { margin-bottom: 2rem; }
+.trace-section h3 { font-size: 1rem; border-bottom: 1px solid var(--rule); padding-bottom: 0.25rem; }
+pre.body {
+  background: #f9fafb;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.75rem;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SF Mono, Menlo, monospace;
+  font-size: 0.85rem;
+}
+.kv { color: var(--muted); font-size: 0.85rem; }

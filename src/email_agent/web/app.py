@@ -1,9 +1,13 @@
 import base64
 import json
 import logging
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request, Response
 from starlette.datastructures import UploadFile
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from email_agent.mail.mailgun import (
     MailgunEmailProvider,
@@ -56,15 +60,26 @@ def build_app_from_settings() -> FastAPI:
     )
     runtime = AssistantRuntime(factory, attachments_root=settings.attachments_root)
     settings.attachments_root.mkdir(parents=True, exist_ok=True)
-    return build_app(provider=provider, runtime=runtime)
+    return build_app(provider=provider, runtime=runtime, session_factory=factory)
 
 
-def build_app(*, provider: MailgunEmailProvider, runtime: AssistantRuntime) -> FastAPI:
+def build_app(
+    *,
+    provider: MailgunEmailProvider,
+    runtime: AssistantRuntime,
+    session_factory: "async_sessionmaker[AsyncSession] | None" = None,
+) -> FastAPI:
     """Build the FastAPI app with its handler dependencies wired in.
 
     `provider` and `runtime` are injected so tests can swap them out.
+    `session_factory`, when provided, mounts the admin router at /admin.
     """
     app = FastAPI(title="email-assistant")
+
+    if session_factory is not None:
+        from email_agent.web.admin.router import make_admin_router
+
+        app.include_router(make_admin_router(session_factory), prefix="/admin")
 
     @app.post("/webhooks/mailgun")
     async def mailgun_webhook(request: Request) -> Response:

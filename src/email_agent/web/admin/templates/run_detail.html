@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}run {{ run.id }} — email-assistant admin{% endblock %}
+{% block content %}
+<h2>Run <code>{{ run.id }}</code></h2>
+<p class="kv">
+  assistant <code>{{ run.assistant_id }}</code> ·
+  thread <code>{{ run.thread_id }}</code> ·
+  <span class="status status-{{ run.status }}">{{ run.status }}</span> ·
+  started {{ run.started_at }} ·
+  completed {{ run.completed_at or "—" }}
+  {% if run.error %}
+  · <span class="status status-failed">error: {{ run.error }}</span>
+  {% endif %}
+  · <a href="/admin/runs/{{ run.id }}.json">json</a>
+</p>
+
+<section class="trace-section">
+  <h3>Inbound</h3>
+  {% if inbound %}
+    <p class="kv">
+      from {{ inbound.from_email }} → {{ inbound.to_emails | join(", ") }}<br>
+      subject: {{ inbound.subject }}
+    </p>
+    <pre class="body">{{ inbound.body_text }}</pre>
+  {% else %}
+    <p class="kv">— no inbound message —</p>
+  {% endif %}
+</section>
+
+<section class="trace-section">
+  <h3>Recalled memory ({{ memory_recalls | length }})</h3>
+  {% for m in memory_recalls %}
+    <pre class="body">{{ m.content }}</pre>
+  {% else %}
+    <p class="kv">— no recalled memory —</p>
+  {% endfor %}
+</section>
+
+<section class="trace-section">
+  <h3>Steps ({{ steps | length }})</h3>
+  {% for s in steps %}
+    <p class="kv"><strong>{{ s.kind }}</strong> · ${{ "%.4f"|format(s.cost_usd) }}</p>
+    <pre class="body">in:  {{ s.input_summary }}
+out: {{ s.output_summary }}</pre>
+  {% else %}
+    <p class="kv">— no steps recorded —</p>
+  {% endfor %}
+</section>
+
+<section class="trace-section">
+  <h3>Outbound reply</h3>
+  {% if outbound %}
+    <p class="kv">
+      from {{ outbound.from_email }} → {{ outbound.to_emails | join(", ") }}<br>
+      subject: {{ outbound.subject }}<br>
+      message-id: <code>{{ outbound.message_id_header }}</code><br>
+      in-reply-to: <code>{{ outbound.in_reply_to_header }}</code>
+    </p>
+    <pre class="body">{{ outbound.body_text }}</pre>
+  {% else %}
+    <p class="kv">— no outbound (run did not complete) —</p>
+  {% endif %}
+</section>
+
+{% if usage %}
+<section class="trace-section">
+  <h3>Usage</h3>
+  <p class="kv">
+    {{ usage.provider }} / <code>{{ usage.model }}</code> ·
+    input {{ usage.input_tokens }} · output {{ usage.output_tokens }} · ${{ "%.4f"|format(usage.cost_usd) }}
+  </p>
+</section>
+{% endif %}
+{% endblock %}

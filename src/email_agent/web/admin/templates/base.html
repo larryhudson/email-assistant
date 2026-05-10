@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}email-assistant admin{% endblock %}</title>
+  <link rel="stylesheet" href="/admin/static/admin.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>email-assistant admin</h1>
+  <nav>
+    <a href="/admin/">assistants</a>
+    <a href="/admin/runs">runs</a>
+  </nav>
+  <p class="auth-note">no auth — bind to 127.0.0.1 only</p>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>
