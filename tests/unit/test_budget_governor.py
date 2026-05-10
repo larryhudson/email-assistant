@@ -10,7 +10,7 @@ from email_agent.db.models import (
     Owner,
     UsageLedger,
 )
-from email_agent.domain.budget_governor import Allow, BudgetGovernor
+from email_agent.domain.budget_governor import Allow, BudgetGovernor, BudgetLimitReply
 from email_agent.models.assistant import AssistantScope, AssistantStatus
 
 
@@ -101,3 +101,47 @@ async def test_governor_allows_when_under_limit(
     decision = await governor.decide(_scope())
 
     assert isinstance(decision, Allow)
+
+
+async def test_governor_blocks_when_at_limit(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+):
+    async with sqlite_session_factory() as session:
+        await _seed(
+            session,
+            monthly_limit_cents=1000,
+            spent_cents=1000,
+            spent_at=datetime(2026, 5, 5, tzinfo=UTC),
+        )
+
+    now = datetime(2026, 5, 29, tzinfo=UTC)
+    governor = BudgetGovernor(sqlite_session_factory, now=lambda: now)
+    decision = await governor.decide(_scope())
+
+    assert decision == BudgetLimitReply(
+        monthly_limit_cents=1000,
+        spent_cents=1000,
+        days_until_reset=3,
+    )
+
+
+async def test_governor_blocks_when_over_limit(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+):
+    async with sqlite_session_factory() as session:
+        await _seed(
+            session,
+            monthly_limit_cents=1000,
+            spent_cents=1500,
+            spent_at=datetime(2026, 5, 5, tzinfo=UTC),
+        )
+
+    now = datetime(2026, 5, 31, 23, 59, 59, tzinfo=UTC)
+    governor = BudgetGovernor(sqlite_session_factory, now=lambda: now)
+    decision = await governor.decide(_scope())
+
+    assert decision == BudgetLimitReply(
+        monthly_limit_cents=1000,
+        spent_cents=1500,
+        days_until_reset=1,
+    )

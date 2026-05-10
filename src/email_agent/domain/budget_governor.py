@@ -1,4 +1,7 @@
+import math
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -38,8 +41,14 @@ class BudgetGovernor:
     class owns the SQL.
     """
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
         self._session_factory = session_factory
+        self._now = now
 
     async def decide(self, scope: AssistantScope) -> BudgetDecision:
         async with self._session_factory() as session:
@@ -55,8 +64,18 @@ class BudgetGovernor:
 
         if spent < budget.monthly_limit_cents:
             return Allow()
-        # Tasks 2-3 will return BudgetLimitReply here.
-        raise NotImplementedError("at/over-limit branch lands in task 2")
+
+        period_resets_at = budget.period_resets_at
+        if period_resets_at.tzinfo is None:
+            # sqlite (test backend) drops tzinfo; postgres preserves it.
+            period_resets_at = period_resets_at.replace(tzinfo=UTC)
+        remaining = period_resets_at - self._now()
+        days_until_reset = max(0, math.ceil(remaining.total_seconds() / 86400))
+        return BudgetLimitReply(
+            monthly_limit_cents=budget.monthly_limit_cents,
+            spent_cents=spent,
+            days_until_reset=days_until_reset,
+        )
 
 
 __all__ = ["Allow", "BudgetDecision", "BudgetGovernor", "BudgetLimitReply"]
