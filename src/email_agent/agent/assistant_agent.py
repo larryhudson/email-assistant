@@ -1,11 +1,12 @@
 from contextlib import contextmanager
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.models import Model
 from pydantic_ai.models.test import TestModel
 
 from email_agent.models.agent import AgentDeps, AgentResult, RunUsage
 from email_agent.models.assistant import AssistantScope
+from email_agent.models.sandbox import BashResult, ToolCall
 
 
 class AssistantAgent:
@@ -40,6 +41,62 @@ class AssistantAgent:
             output_type=str,
             instructions=scope.system_prompt,
         )
+
+        @agent.tool
+        async def read(ctx: RunContext[AgentDeps], path: str) -> str:
+            """Read a file inside /workspace and return its text contents."""
+            result = await ctx.deps.sandbox.run_tool(
+                ctx.deps.assistant_id,
+                ctx.deps.run_id,
+                ToolCall(kind="read", path=path),
+            )
+            if not result.ok:
+                raise RuntimeError(result.error or f"read({path}) failed")
+            assert isinstance(result.output, str)
+            return result.output
+
+        @agent.tool
+        async def write(ctx: RunContext[AgentDeps], path: str, content: str) -> str:
+            """Write a file inside /workspace. Refuses paths under /workspace/emails/."""
+            result = await ctx.deps.sandbox.run_tool(
+                ctx.deps.assistant_id,
+                ctx.deps.run_id,
+                ToolCall(kind="write", path=path, content=content),
+            )
+            if not result.ok:
+                raise RuntimeError(result.error or f"write({path}) failed")
+            return f"wrote {path}"
+
+        @agent.tool
+        async def edit(ctx: RunContext[AgentDeps], path: str, old: str, new: str) -> str:
+            """Replace the first occurrence of `old` with `new` in `path`."""
+            result = await ctx.deps.sandbox.run_tool(
+                ctx.deps.assistant_id,
+                ctx.deps.run_id,
+                ToolCall(kind="edit", path=path, old=old, new=new),
+            )
+            if not result.ok:
+                raise RuntimeError(result.error or f"edit({path}) failed")
+            return f"edited {path}"
+
+        @agent.tool
+        async def bash(ctx: RunContext[AgentDeps], command: str) -> str:
+            """Run a bash command in the sandbox; returns combined stdout/stderr."""
+            result = await ctx.deps.sandbox.run_tool(
+                ctx.deps.assistant_id,
+                ctx.deps.run_id,
+                ToolCall(kind="bash", command=command),
+            )
+            if isinstance(result.output, BashResult):
+                return (
+                    f"exit_code={result.output.exit_code}\n"
+                    f"stdout:\n{result.output.stdout}\n"
+                    f"stderr:\n{result.output.stderr}"
+                )
+            if not result.ok:
+                raise RuntimeError(result.error or "bash failed")
+            return ""
+
         return agent
 
     @contextmanager
