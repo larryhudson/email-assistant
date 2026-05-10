@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -145,6 +145,7 @@ class AssistantRuntime:
         provider_message_id_factory: Callable[[], str] | None = None,
         run_timeout_seconds: float | None = None,
         model_factory: "Callable[[AssistantScope], Model] | None" = None,
+        run_agent_defer: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._attachments_root = attachments_root
@@ -164,6 +165,7 @@ class AssistantRuntime:
         )
         self._run_timeout_seconds = run_timeout_seconds
         self._model_factory = model_factory
+        self._run_agent_defer = run_agent_defer
 
     async def accept_inbound(self, email: NormalizedInboundEmail) -> AcceptOutcome:
         outcome = await self._router.resolve(email)
@@ -183,19 +185,31 @@ class AssistantRuntime:
                 thread=attached_thread,
                 attachments_root=self._attachments_root,
             )
-            await _ensure_queued_run(
+            run = await _ensure_queued_run(
                 session,
                 assistant_id=scope.assistant_id,
                 thread_id=attached_thread.id,
                 inbound_message_id=persisted.message.id,
             )
+            run_id = run.id
             await session.commit()
-            return Accepted(
+
+        # Enqueue ONLY for newly-persisted inbounds. persist_inbound +
+        # _ensure_queued_run share a transaction, so created==True implies
+        # the AgentRun is also new — duplicate webhook deliveries fall here
+        # with created==False and skip the enqueue.
+        if persisted.created and self._run_agent_defer is not None:
+            await self._run_agent_defer(
+                run_id=run_id,
                 assistant_id=scope.assistant_id,
-                thread_id=attached_thread.id,
-                message_id=persisted.message.id,
-                created=persisted.created,
             )
+
+        return Accepted(
+            assistant_id=scope.assistant_id,
+            thread_id=attached_thread.id,
+            message_id=persisted.message.id,
+            created=persisted.created,
+        )
 
     async def execute_run(self, run_id: str) -> RunOutcome:
         if (

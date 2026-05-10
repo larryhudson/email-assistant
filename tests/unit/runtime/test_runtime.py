@@ -172,3 +172,62 @@ async def test_accept_inbound_writes_agent_run_queued(
     async with sqlite_session_factory() as session:
         runs = (await session.execute(select(AgentRun))).scalars().all()
         assert len(runs) == 1
+
+
+async def test_accept_inbound_calls_run_agent_defer_callback(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """Once the queued AgentRun row commits, accept_inbound must invoke
+    the injected `run_agent_defer` callback so a Procrastinate worker
+    will pick the run up. Drops, sender-rejections, and duplicate deliveries
+    must NOT enqueue."""
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    deferred: list[dict[str, str]] = []
+
+    async def fake_defer(*, run_id: str, assistant_id: str) -> None:
+        deferred.append({"run_id": run_id, "assistant_id": assistant_id})
+
+    runtime = AssistantRuntime(
+        sqlite_session_factory,
+        attachments_root=tmp_path,
+        run_agent_defer=fake_defer,
+    )
+
+    accepted = await runtime.accept_inbound(_inbound())
+    assert isinstance(accepted, Accepted)
+    assert len(deferred) == 1
+    assert deferred[0]["assistant_id"] == "a-1"
+    # The run_id should reference the AgentRun row that was just queued.
+    async with sqlite_session_factory() as session:
+        from email_agent.db.models import AgentRun as _AgentRun
+
+        run = (await session.execute(select(_AgentRun))).scalar_one()
+        assert deferred[0]["run_id"] == run.id
+
+    # Duplicate delivery: still one AgentRun, no second deferral.
+    again = await runtime.accept_inbound(_inbound())
+    assert isinstance(again, Accepted)
+    assert len(deferred) == 1
+
+
+async def test_accept_inbound_does_not_defer_on_drop(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    deferred: list[dict[str, str]] = []
+
+    async def fake_defer(*, run_id: str, assistant_id: str) -> None:
+        deferred.append({"run_id": run_id, "assistant_id": assistant_id})
+
+    runtime = AssistantRuntime(
+        sqlite_session_factory,
+        attachments_root=tmp_path,
+        run_agent_defer=fake_defer,
+    )
+
+    outcome = await runtime.accept_inbound(_inbound(to="who@example.com"))
+    assert isinstance(outcome, Dropped)
+    assert deferred == []
