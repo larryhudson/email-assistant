@@ -280,3 +280,52 @@ async def test_execute_run_sends_template_when_budget_exceeded(
     async with sqlite_session_factory() as session:
         run = (await session.execute(select(AgentRun).where(AgentRun.id == run_id))).scalar_one()
         assert run.status == "budget_limited"
+
+
+def _failing_model() -> FunctionModel:
+    """Model that raises on first call so the agent surfaces the failure."""
+
+    async def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise ValueError("model exploded")
+
+    return FunctionModel(fn)
+
+
+async def test_execute_run_records_failed_run_and_reraises(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    import pytest
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    email_provider = InMemoryEmailProvider()
+    sandbox = InMemorySandbox()
+    memory = InMemoryMemoryAdapter()
+    agent = AssistantAgent()
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        sandbox=sandbox,
+        memory=memory,
+        agent=agent,
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    with (
+        agent.override_model(_scope(), _failing_model()),
+        pytest.raises(ValueError, match="exploded"),
+    ):
+        await runtime.execute_run(run_id)
+
+    assert email_provider.sent == []
+
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun))).scalar_one()
+        assert run.status == "failed"
+        assert run.error is not None
+        assert "exploded" in run.error
