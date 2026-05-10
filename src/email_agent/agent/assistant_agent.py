@@ -6,6 +6,7 @@ from pydantic_ai.models.test import TestModel
 
 from email_agent.models.agent import AgentDeps, AgentResult, RunUsage
 from email_agent.models.assistant import AssistantScope
+from email_agent.models.memory import Memory
 from email_agent.models.sandbox import BashResult, ToolCall
 
 
@@ -78,6 +79,11 @@ class AssistantAgent:
             if not result.ok:
                 raise RuntimeError(result.error or f"edit({path}) failed")
             return f"edited {path}"
+
+        @agent.tool
+        async def memory_search(ctx: RunContext[AgentDeps], query: str) -> list[Memory]:
+            """Search durable memory for the assistant; bypasses the sandbox."""
+            return await ctx.deps.memory.search(ctx.deps.assistant_id, query)
 
         @agent.tool
         async def bash(ctx: RunContext[AgentDeps], command: str) -> str:
