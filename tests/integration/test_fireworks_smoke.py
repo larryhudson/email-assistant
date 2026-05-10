@@ -1,11 +1,11 @@
-"""Smoke test for the OpenAI-compatible DeepSeek wiring.
+"""Smoke test for the Fireworks AI provider wiring.
 
 Gated behind `EMAIL_AGENT_E2E=1` so CI doesn't pay for tokens.
 Run locally with:
 
     EMAIL_AGENT_E2E=1 \
-    DEEPSEEK_API_KEY=sk-... \
-    uv run pytest tests/integration/test_deepseek_smoke.py
+    FIREWORKS_API_KEY=... \
+    uv run pytest tests/integration/test_fireworks_smoke.py
 """
 
 import os
@@ -25,10 +25,13 @@ pytestmark = [
         reason="EMAIL_AGENT_E2E=1 not set",
     ),
     pytest.mark.skipif(
-        not os.environ.get("DEEPSEEK_API_KEY"),
-        reason="DEEPSEEK_API_KEY not set",
+        not os.environ.get("FIREWORKS_API_KEY"),
+        reason="FIREWORKS_API_KEY not set",
     ),
 ]
+
+
+_FIREWORKS_MODEL_ID = os.environ.get("FIREWORKS_MODEL_ID", "accounts/fireworks/models/minimax-m2p7")
 
 
 def _scope() -> AssistantScope:
@@ -42,20 +45,17 @@ def _scope() -> AssistantScope:
         memory_namespace="mum",
         tool_allowlist=("read",),
         budget_id="b-1",
-        model_name="deepseek-chat",
+        model_name=_FIREWORKS_MODEL_ID,
         system_prompt="be terse — one short sentence only.",
     )
 
 
-async def test_deepseek_returns_non_empty_text() -> None:
+async def test_fireworks_returns_non_empty_text() -> None:
     from pydantic_ai.models.openai import OpenAIChatModel
-    from pydantic_ai.providers.openai import OpenAIProvider
+    from pydantic_ai.providers.fireworks import FireworksProvider
 
-    provider = OpenAIProvider(
-        api_key=os.environ["DEEPSEEK_API_KEY"],
-        base_url="https://api.deepseek.com/v1",
-    )
-    model = OpenAIChatModel("deepseek-chat", provider=provider)
+    provider = FireworksProvider(api_key=os.environ["FIREWORKS_API_KEY"])
+    model = OpenAIChatModel(_FIREWORKS_MODEL_ID, provider=provider)
 
     sandbox = InMemorySandbox()
     await sandbox.ensure_started("a-1")

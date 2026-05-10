@@ -27,37 +27,30 @@ if TYPE_CHECKING:
     from email_agent.sandbox.port import AssistantSandbox
 
 
-def make_deepseek_model_factory(
+def make_fireworks_model_factory(
     settings: Settings,
 ) -> "Callable[[AssistantScope], Model]":
-    """Return a factory that builds a DeepSeek model from `scope.model_name`.
+    """Return a factory that builds a Fireworks model.
 
-    DeepSeek's API is OpenAI-compatible, so we use PydanticAI's OpenAI
-    provider class with a custom `base_url`.
+    `scope.model_name` is treated as a short alias; the actual Fireworks
+    model id comes from `settings.fireworks_model_id`. If the scope's name
+    already looks like a fully-qualified Fireworks id (`accounts/...`), it
+    overrides the setting — useful for per-assistant model overrides later.
     """
     from pydantic_ai.models.openai import OpenAIChatModel
-    from pydantic_ai.providers.openai import OpenAIProvider
+    from pydantic_ai.providers.fireworks import FireworksProvider
 
-    api_key = settings.deepseek_api_key.get_secret_value()
-    base_url = str(settings.deepseek_base_url)
+    api_key = settings.fireworks_api_key.get_secret_value()
+    default_model_id = settings.fireworks_model_id
 
     def factory(scope: AssistantScope) -> "Model":
-        # Normalise short names so assistants can reference "deepseek-flash"
-        # but the actual model id sent to the API is correct.
-        model_id = _resolve_deepseek_model_id(scope.model_name)
-        provider = OpenAIProvider(api_key=api_key, base_url=base_url)
+        model_id = (
+            scope.model_name if scope.model_name.startswith("accounts/") else default_model_id
+        )
+        provider = FireworksProvider(api_key=api_key)
         return OpenAIChatModel(model_id, provider=provider)
 
     return factory
-
-
-def _resolve_deepseek_model_id(name: str) -> str:
-    """Map our short names to DeepSeek's model ids."""
-    aliases = {
-        "deepseek-flash": "deepseek-chat",
-        "deepseek-v4-flash": "deepseek-chat",
-    }
-    return aliases.get(name, name)
 
 
 def make_runtime_from_settings(
@@ -75,9 +68,9 @@ def make_runtime_from_settings(
     `sandbox` defaults to an `InMemorySandbox` since the docker sandbox
     isn't yet wired into composition (slice 6/7 work). `memory` defaults
     to `InMemoryMemoryAdapter` for the same reason — Cognee is slice 6.
-    `use_real_model=False` skips wiring DeepSeek so callers can rely on
+    `use_real_model=False` skips wiring Fireworks so callers can rely on
     a test override; `use_real_model=True` (default) plumbs through
-    `make_deepseek_model_factory(settings)`.
+    `make_fireworks_model_factory(settings)`.
     """
     sandbox = sandbox or InMemorySandbox()
     memory = memory or InMemoryMemoryAdapter()
@@ -86,7 +79,7 @@ def make_runtime_from_settings(
     settings.attachments_root.mkdir(parents=True, exist_ok=True)
     settings.run_inputs_root.mkdir(parents=True, exist_ok=True)
 
-    model_factory = make_deepseek_model_factory(settings) if use_real_model else None
+    model_factory = make_fireworks_model_factory(settings) if use_real_model else None
 
     return AssistantRuntime(
         session_factory,
@@ -127,7 +120,7 @@ def make_runtime_for_inject(
 
 
 __all__ = [
-    "make_deepseek_model_factory",
+    "make_fireworks_model_factory",
     "make_runtime_for_inject",
     "make_runtime_from_settings",
 ]
