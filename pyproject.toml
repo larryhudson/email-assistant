@@ -44,6 +44,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
   "integration: requires Postgres running via docker-compose",
+  "requires_docker: requires a reachable docker daemon",
 ]
 
 [tool.ruff]
