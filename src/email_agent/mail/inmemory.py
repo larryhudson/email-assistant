@@ -1,5 +1,5 @@
+import uuid
 from collections import deque
-from itertools import count
 
 from email_agent.models.email import (
     NormalizedInboundEmail,
@@ -20,7 +20,6 @@ class InMemoryEmailProvider:
         self._inbox: deque[NormalizedInboundEmail] = deque()
         self.sent: list[NormalizedOutboundEmail] = []
         self._verify_should_raise = verify_should_raise
-        self._counter = count(1)
 
     def queue_inbound(self, email: NormalizedInboundEmail) -> None:
         self._inbox.append(email)
@@ -36,7 +35,11 @@ class InMemoryEmailProvider:
 
     async def send_reply(self, reply: NormalizedOutboundEmail) -> SentEmail:
         self.sent.append(reply)
+        # Mailgun returns globally-unique IDs per send. Mirror that with a
+        # uuid (not a monotonic counter), otherwise dry-run worker restarts
+        # collide on `inmem-1` and RunRecorder's `(assistant_id,
+        # provider_message_id)` idempotency silently returns the stale row.
         return SentEmail(
-            provider_message_id=f"inmem-{next(self._counter)}",
+            provider_message_id=f"inmem-{uuid.uuid4().hex[:12]}",
             message_id_header=reply.message_id_header,
         )
