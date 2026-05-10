@@ -1,0 +1,34 @@
+# Fast checks on every commit; tests on push (slower).
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-lint
+        name: ruff lint
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ty
+        name: ty type-check
+        entry: uv run ty check
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: pytest-unit
+        name: pytest (unit)
+        entry: uv run pytest tests/unit -q
+        language: system
+        pass_filenames: false
+        types: [python]
+        stages: [pre-push]
