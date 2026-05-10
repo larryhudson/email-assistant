@@ -89,3 +89,45 @@ def test_projected_file_holds_bytes():
 def test_pending_attachment_records_filename():
     pa = PendingAttachment(sandbox_path="/workspace/out.pdf", filename="report.pdf")
     assert pa.filename == "report.pdf"
+
+
+def test_assistant_scope_from_rows_flattens_three_rows():
+    from email_agent.db.models import Assistant as AssistantRow
+    from email_agent.db.models import AssistantScopeRow, EndUser, Owner
+
+    owner = Owner(id="o-1", name="Larry", primary_admin_id=None)
+    end_user = EndUser(id="u-1", owner_id="o-1", email="mum@example.com")
+    assistant = AssistantRow(
+        id="a-1",
+        end_user_id="u-1",
+        inbound_address="mum@assistants.example.com",
+        status="active",
+        allowed_senders=["mum@example.com"],
+        model="deepseek-flash",
+        system_prompt="be kind",
+    )
+    scope_row = AssistantScopeRow(
+        assistant_id="a-1",
+        memory_namespace="mum",
+        tool_allowlist=["read", "write"],
+        budget_id="b-1",
+    )
+
+    scope = AssistantScope.from_rows(
+        owner=owner,
+        end_user=end_user,
+        assistant=assistant,
+        scope_row=scope_row,
+    )
+
+    assert scope.assistant_id == "a-1"
+    assert scope.owner_id == "o-1"
+    assert scope.end_user_id == "u-1"
+    assert scope.inbound_address == "mum@assistants.example.com"
+    assert scope.status is AssistantStatus.ACTIVE
+    assert scope.allowed_senders == ("mum@example.com",)
+    assert scope.memory_namespace == "mum"
+    assert scope.tool_allowlist == ("read", "write")
+    assert scope.budget_id == "b-1"
+    assert scope.model_name == "deepseek-flash"
+    assert scope.system_prompt == "be kind"
