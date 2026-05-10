@@ -4,6 +4,7 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.models import Model
 from pydantic_ai.models.test import TestModel
 
+from email_agent.agent.pricing import estimate_cost_cents
 from email_agent.models.agent import AgentDeps, AgentResult, RunUsage
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.memory import Memory
@@ -146,12 +147,18 @@ class AssistantAgent:
         agent = self._agent_for(scope)
         result = await agent.run(prompt, deps=deps)
         usage = result.usage()
+        input_tokens = usage.input_tokens or 0
+        output_tokens = usage.output_tokens or 0
         return AgentResult(
             body=result.output,
             usage=RunUsage(
-                input_tokens=usage.input_tokens or 0,
-                output_tokens=usage.output_tokens or 0,
-                cost_cents=0,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_cents=estimate_cost_cents(
+                    model=scope.model_name,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                ),
             ),
         )
 
