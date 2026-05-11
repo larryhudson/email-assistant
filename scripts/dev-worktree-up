@@ -18,8 +18,11 @@ BRANCH="feat/$NAME"
 DB="email_agent_$NAME"
 POSTGRES_CONTAINER="email-assistant-postgres-1"
 
-if [[ ! "$NAME" =~ ^[a-z0-9_-]+$ ]]; then
-    echo "name must match [a-z0-9_-]+ (got: $NAME)" >&2
+if [[ ! "$NAME" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    # Postgres unquoted identifiers can't contain hyphens, so we forbid them
+    # outright to keep the DB name (email_agent_<name>) creatable without
+    # quoting. Use underscores instead.
+    echo "name must match [a-z][a-z0-9_]* (got: $NAME)" >&2
     exit 1
 fi
 
@@ -47,11 +50,11 @@ docker exec -i "$POSTGRES_CONTAINER" psql -U email_agent -d email_agent \
 echo "→ creating worktree at $WORKTREE on $BRANCH"
 git -C "$ROOT" worktree add "$WORKTREE" -b "$BRANCH" main
 
-echo "→ writing .env (DATABASE_URL → $DB)"
-sed -e "s|/email_agent$|/$DB|" "$ROOT/.env" > "$WORKTREE/.env"
-
-echo "→ rewriting Procfile.dev port → $PORT"
-sed -i -E "s/--port [0-9]+/--port $PORT/" "$WORKTREE/Procfile.dev"
+echo "→ writing .env (DATABASE_URL → $DB, PORT → $PORT)"
+sed -e "s|/email_agent$|/$DB|" -E -e "s/^PORT=.*/PORT=$PORT/" "$ROOT/.env" \
+    > "$WORKTREE/.env"
+# Append PORT if the parent .env didn't have it (older checkouts).
+grep -q "^PORT=" "$WORKTREE/.env" || echo "PORT=$PORT" >> "$WORKTREE/.env"
 
 echo "→ uv sync"
 (cd "$WORKTREE" && uv sync --quiet)

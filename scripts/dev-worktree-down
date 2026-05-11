@@ -20,8 +20,8 @@ BRANCH="feat/$NAME"
 DB="email_agent_$NAME"
 POSTGRES_CONTAINER="email-assistant-postgres-1"
 
-if [[ ! "$NAME" =~ ^[a-z0-9_-]+$ ]]; then
-    echo "name must match [a-z0-9_-]+ (got: $NAME)" >&2
+if [[ ! "$NAME" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    echo "name must match [a-z][a-z0-9_]* (got: $NAME)" >&2
     exit 1
 fi
 

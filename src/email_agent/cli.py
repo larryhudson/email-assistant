@@ -1,4 +1,5 @@
 import asyncio
+import os
 import shlex
 import subprocess
 import sys
@@ -417,8 +418,14 @@ def migrate() -> None:
 
 @app.command()
 def web(
-    host: str = typer.Option("127.0.0.1", help="Bind host"),
-    port: int = typer.Option(8000, help="Bind port"),
+    host: str = typer.Option(
+        os.environ.get("HOST", "127.0.0.1"),
+        help="Bind host (env: HOST).",
+    ),
+    port: int = typer.Option(
+        int(os.environ.get("PORT", "8000")),
+        help="Bind port (env: PORT).",
+    ),
     reload: bool = typer.Option(True, help="Auto-reload on file changes (dev default)"),
 ) -> None:
     """Run the FastAPI app (Mailgun webhook + future admin UI)."""
