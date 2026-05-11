@@ -2,32 +2,26 @@
 {% block title %}assistants — email-assistant admin{% endblock %}
 {% block content %}
 <h2>Assistants</h2>
-<table class="data">
-  <thead>
-    <tr>
-      <th>id</th>
-      <th>inbound</th>
-      <th>status</th>
-      <th>model</th>
-      <th>monthly limit</th>
-      <th>spent (this period)</th>
-      <th>last run</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for row in rows %}
-    <tr>
-      <td><code>{{ row.id }}</code></td>
-      <td>{{ row.inbound_address }}</td>
-      <td><span class="status status-{{ row.status }}">{{ row.status }}</span></td>
-      <td><code>{{ row.model }}</code></td>
-      <td>${{ "%.2f"|format(row.monthly_limit) }}</td>
-      <td>${{ "%.4f"|format(row.spent) }}</td>
-      <td>{{ row.last_run_at or "—" }}</td>
-    </tr>
-    {% else %}
-    <tr><td colspan="7" class="empty">No assistants yet. Run <code>email-agent seed-assistant</code>.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+
+{% if rows %}
+<ul class="card-list assistant-grid">
+  {% for row in rows %}
+  <li class="card">
+    <div class="card-head">
+      <h3 class="card-title"><code>{{ row.id }}</code></h3>
+      <span class="status status-{{ row.status }}">{{ row.status }}</span>
+    </div>
+    <p class="card-subtitle">{{ row.inbound_address }}</p>
+    <dl class="kv-grid">
+      <div><dt>Model</dt><dd><code>{{ row.model }}</code></dd></div>
+      <div><dt>Monthly limit</dt><dd>${{ "%.2f"|format(row.monthly_limit) }}</dd></div>
+      <div><dt>Spent</dt><dd>${{ "%.4f"|format(row.spent) }}</dd></div>
+      <div><dt>Last run</dt><dd>{{ row.last_run_at or "—" }}</dd></div>
+    </dl>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No assistants yet. Run <code>email-agent seed-assistant</code>.</p>
+{% endif %}
 {% endblock %}

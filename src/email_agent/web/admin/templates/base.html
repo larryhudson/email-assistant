@@ -2,20 +2,39 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#15181d" media="(prefers-color-scheme: dark)">
   <title>{% block title %}email-assistant admin{% endblock %}</title>
   <link rel="stylesheet" href="/admin/static/admin.css">
 </head>
+{% set path = request.url.path %}
+{% set on_assistants = path == "/admin/" or path == "/admin" %}
+{% set on_runs = path.startswith("/admin/runs") %}
 <body>
-<header class="topbar">
-  <h1>email-assistant admin</h1>
-  <nav>
-    <a href="/admin/">assistants</a>
-    <a href="/admin/runs">runs</a>
+<header class="appbar">
+  <h1>email-assistant</h1>
+  <nav class="appbar-nav" aria-label="Primary">
+    <a href="/admin/" {% if on_assistants %}aria-current="page"{% endif %}>Assistants</a>
+    <a href="/admin/runs" {% if on_runs %}aria-current="page"{% endif %}>Runs</a>
   </nav>
-  <p class="auth-note">no auth — bind to 127.0.0.1 only</p>
+  <p class="auth-note">no auth — bound to 127.0.0.1</p>
 </header>
+
 <main>
 {% block content %}{% endblock %}
 </main>
+
+<nav class="tabbar" aria-label="Primary">
+  <a href="/admin/" {% if on_assistants %}aria-current="page"{% endif %}>
+    <span class="icon" aria-hidden="true">◐</span>
+    <span>Assistants</span>
+  </a>
+  <a href="/admin/runs" {% if on_runs %}aria-current="page"{% endif %}>
+    <span class="icon" aria-hidden="true">≡</span>
+    <span>Runs</span>
+  </a>
+</nav>
 </body>
 </html>
