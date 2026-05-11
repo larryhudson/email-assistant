@@ -15,6 +15,7 @@ from email_agent.agent.pricing import estimate_cost_usd
 from email_agent.models.agent import AgentDeps, AgentResult, RunStepRecord, RunUsage
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.memory import Memory
+from email_agent.sandbox.skills import SYSTEM_PROMPT_GUIDANCE
 
 
 class AssistantAgent:
@@ -47,8 +48,16 @@ class AssistantAgent:
             model=TestModel(),
             deps_type=AgentDeps,
             output_type=str,
-            instructions=scope.system_prompt,
+            instructions=[scope.system_prompt, SYSTEM_PROMPT_GUIDANCE],
         )
+
+        @agent.instructions
+        def workspace_context(ctx: RunContext[AgentDeps]) -> str:
+            parts = [
+                ctx.deps.context_block.strip(),
+                ctx.deps.skills_block.strip(),
+            ]
+            return "\n\n".join(p for p in parts if p)
 
         @agent.tool
         async def read(ctx: RunContext[AgentDeps], path: str) -> str:

@@ -39,6 +39,8 @@ def _deps(
     env: InMemoryEnvironment | None = None,
     memory: InMemoryMemoryAdapter | None = None,
     pending: list[PendingAttachment] | None = None,
+    skills_block: str = "",
+    context_block: str = "",
 ) -> AgentDeps:
     actual_env = env or InMemoryEnvironment()
     actual_memory = memory or InMemoryMemoryAdapter()
@@ -56,6 +58,8 @@ def _deps(
             pending_attachments=actual_pending,
         ),
         pending_attachments=actual_pending,
+        skills_block=skills_block,
+        context_block=context_block,
     )
 
 
@@ -230,3 +234,63 @@ async def test_attach_file_returns_error_text_instead_of_raising() -> None:
     assert "ERROR: attach_file(missing.pdf) failed" in result.body
     assert "not found" in result.body
     assert deps.pending_attachments == []
+
+
+def _capture_instructions() -> tuple[FunctionModel, dict[str, str | None]]:
+    captured: dict[str, str | None] = {}
+
+    async def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        captured["instructions"] = info.instructions
+        return ModelResponse(parts=[TextPart(content="ok")])
+
+    return FunctionModel(fn), captured
+
+
+async def test_context_block_is_injected_into_instructions() -> None:
+    agent = AssistantAgent()
+    deps = _deps(context_block="# CONTEXT.md\n\nuser is in AEST")
+
+    model, captured = _capture_instructions()
+    with agent.override_model(_scope(), model):
+        await agent.run(_scope(), prompt="hi", deps=deps)
+
+    assert captured["instructions"] is not None
+    assert "user is in AEST" in captured["instructions"]
+
+
+async def test_skills_block_is_injected_into_instructions() -> None:
+    agent = AssistantAgent()
+    deps = _deps(skills_block="# Available skills\n\n## triage\nbody")
+
+    model, captured = _capture_instructions()
+    with agent.override_model(_scope(), model):
+        await agent.run(_scope(), prompt="hi", deps=deps)
+
+    assert captured["instructions"] is not None
+    assert "triage" in captured["instructions"]
+
+
+async def test_workspace_guidance_is_part_of_base_instructions() -> None:
+    """Even with empty skills/context, the agent is told about CONTEXT.md & skills."""
+    agent = AssistantAgent()
+    deps = _deps()
+
+    model, captured = _capture_instructions()
+    with agent.override_model(_scope(), model):
+        await agent.run(_scope(), prompt="hi", deps=deps)
+
+    assert captured["instructions"] is not None
+    assert "CONTEXT.md" in captured["instructions"]
+    assert "skills" in captured["instructions"].lower()
+
+
+async def test_scope_system_prompt_still_present() -> None:
+    agent = AssistantAgent()
+    deps = _deps()
+
+    model, captured = _capture_instructions()
+    with agent.override_model(_scope(), model):
+        await agent.run(_scope(), prompt="hi", deps=deps)
+
+    assert captured["instructions"] is not None
+    assert "be kind" in captured["instructions"]
