@@ -35,6 +35,7 @@ from email_agent.models.email import NormalizedInboundEmail
 from email_agent.runtime.assistant_runtime import AssistantRuntime, Completed
 from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
 from email_agent.sandbox.workspace import AssistantWorkspace
+from email_agent.sandbox.workspace_provider import StaticWorkspaceProvider, WorkspaceProvider
 
 
 async def _seed_assistant(session: AsyncSession) -> None:
@@ -136,7 +137,7 @@ def _build_runtime(
     *,
     tmp_path: Path,
     email_provider: InMemoryEmailProvider,
-    workspace: AssistantWorkspace,
+    workspace_provider: WorkspaceProvider,
     memory: InMemoryMemoryAdapter,
     agent: AssistantAgent,
 ) -> AssistantRuntime:
@@ -144,7 +145,7 @@ def _build_runtime(
         session_factory,
         attachments_root=tmp_path / "attachments",
         email_provider=email_provider,
-        workspace=workspace,
+        workspace_provider=workspace_provider,
         memory=memory,
         agent=agent,
         projector=EmailWorkspaceProjector(run_inputs_root=tmp_path / "run_inputs"),
@@ -179,7 +180,7 @@ async def test_execute_run_sends_reply_and_records_completion(
         sqlite_session_factory,
         tmp_path=tmp_path,
         email_provider=email_provider,
-        workspace=workspace,
+        workspace_provider=StaticWorkspaceProvider(workspace),
         memory=memory,
         agent=agent,
     )
@@ -282,7 +283,7 @@ async def test_execute_run_injects_recalled_memory_into_prompt(
         sqlite_session_factory,
         tmp_path=tmp_path,
         email_provider=email_provider,
-        workspace=workspace,
+        workspace_provider=StaticWorkspaceProvider(workspace),
         memory=memory,  # ty: ignore[invalid-argument-type]
         agent=agent,
     )
@@ -354,7 +355,7 @@ async def test_execute_run_sends_template_when_budget_exceeded(
         sqlite_session_factory,
         tmp_path=tmp_path,
         email_provider=email_provider,
-        workspace=workspace,
+        workspace_provider=StaticWorkspaceProvider(workspace),
         memory=memory,
         agent=agent,
     )
@@ -408,7 +409,7 @@ async def test_execute_run_records_failed_run_and_reraises(
         sqlite_session_factory,
         tmp_path=tmp_path,
         email_provider=email_provider,
-        workspace=workspace,
+        workspace_provider=StaticWorkspaceProvider(workspace),
         memory=memory,
         agent=agent,
     )
@@ -461,7 +462,7 @@ async def test_execute_run_enforces_run_timeout(
         sqlite_session_factory,
         attachments_root=tmp_path / "attachments",
         email_provider=email_provider,
-        workspace=workspace,
+        workspace_provider=StaticWorkspaceProvider(workspace),
         memory=memory,
         agent=agent,
         projector=EmailWorkspaceProjector(run_inputs_root=tmp_path / "run_inputs"),

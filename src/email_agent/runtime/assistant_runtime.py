@@ -56,6 +56,7 @@ from email_agent.models.email import (
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import PendingAttachment, ProjectedFile
 from email_agent.sandbox.workspace import AssistantWorkspace
+from email_agent.sandbox.workspace_provider import WorkspaceProvider
 
 
 class _EmailProviderLike(Protocol):
@@ -124,7 +125,7 @@ class AssistantRuntime:
         # Below are required for execute_run; left optional so accept_inbound-only
         # callers (the webhook fast path) don't have to construct them.
         email_provider: _EmailProviderLike | None = None,
-        workspace: AssistantWorkspace | None = None,
+        workspace_provider: WorkspaceProvider | None = None,
         memory: _MemoryLike | None = None,
         agent: AssistantAgent | None = None,
         projector: EmailWorkspaceProjector | None = None,
@@ -142,7 +143,7 @@ class AssistantRuntime:
         self._router = AssistantRouter(session_factory)
         self._resolver = ThreadResolver(session_factory)
         self._email_provider = email_provider
-        self._workspace = workspace
+        self._workspace_provider = workspace_provider
         self._memory = memory
         self._agent = agent
         self._projector = projector
@@ -205,17 +206,18 @@ class AssistantRuntime:
     async def execute_run(self, run_id: str) -> RunOutcome:
         if (
             self._email_provider is None
-            or self._workspace is None
+            or self._workspace_provider is None
             or self._memory is None
             or self._agent is None
             or self._projector is None
         ):
             raise RuntimeError(
-                "execute_run requires email_provider, workspace, memory, agent, "
+                "execute_run requires email_provider, workspace_provider, memory, agent, "
                 "and projector to be configured"
             )
 
         scope, _run, inbound, thread, messages, attachments = await self._load_run(run_id)
+        workspace = await self._workspace_provider.get_workspace(scope.assistant_id)
         inbound_email = _inbound_email_from_message(inbound)
 
         decision = await self._budget.decide(scope)
@@ -241,7 +243,7 @@ class AssistantRuntime:
             current_message_id=inbound.id,
         )
         projected_files = _read_projection_files(projection.run_inputs_dir)
-        await self._workspace.project_emails(projected_files)
+        await workspace.project_emails(projected_files)
 
         # Pre-call recall once with the inbound body (truncated) as the query.
         # Reliable beats clever — gives the model prior context without it
@@ -266,8 +268,8 @@ class AssistantRuntime:
             toolset=AgentToolset(
                 assistant_id=scope.assistant_id,
                 run_id=run_id,
-                env=self._workspace.environment,
-                workspace=self._workspace,
+                env=workspace.environment,
+                workspace=workspace,
                 memory=self._memory,
                 pending_attachments=pending_attachments,
             ),
@@ -302,7 +304,7 @@ class AssistantRuntime:
             raise
 
         attachment_models = await _read_attachments_out(
-            self._workspace,
+            workspace,
             deps.pending_attachments,
         )
 
