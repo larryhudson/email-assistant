@@ -71,6 +71,35 @@ def test_passes_attachments_through() -> None:
     assert envelope.attachments == [pdf]
 
 
+def test_renders_markdown_body_to_html() -> None:
+    builder = ReplyEnvelopeBuilder()
+    envelope = builder.build(
+        inbound=_inbound(),
+        from_email="mum@assistants.example.com",
+        body_text="# Hi\n\n- one\n- two\n",
+        attachments=[],
+        message_id_factory=lambda: "<run-abc@x>",
+    )
+
+    assert envelope.body_html is not None
+    assert "<h1>Hi</h1>" in envelope.body_html
+    assert "<li>one</li>" in envelope.body_html
+    assert "<li>two</li>" in envelope.body_html
+
+
+def test_omits_body_html_when_body_is_whitespace_only() -> None:
+    builder = ReplyEnvelopeBuilder()
+    envelope = builder.build(
+        inbound=_inbound(),
+        from_email="mum@assistants.example.com",
+        body_text="   \n",
+        attachments=[],
+        message_id_factory=lambda: "<run-abc@x>",
+    )
+
+    assert envelope.body_html is None
+
+
 def test_starts_references_chain_when_inbound_has_none() -> None:
     builder = ReplyEnvelopeBuilder()
     envelope = builder.build(

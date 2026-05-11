@@ -49,6 +49,7 @@ class NormalizedOutboundEmail(_Frozen):
     to_emails: list[str]
     subject: str
     body_text: str
+    body_html: str | None = None
     message_id_header: str
     in_reply_to_header: str | None = None
     references_headers: list[str] = Field(default_factory=list)
