@@ -161,6 +161,19 @@ async def tick_scheduled_tasks(timestamp: int) -> int:
     return len(before)
 
 
+# Bound the procrastinate_jobs / procrastinate_events growth — without this,
+# the periodic tick alone adds ~5k events/day. Runs daily at 03:17 UTC, off-peak
+# for most timezones; defers procrastinate's built-in remove_old_jobs with a
+# week-long retention window. Failed jobs are pruned too — they're already
+# durably recorded in our own agent_runs table.
+@app.periodic(cron="17 3 * * *")
+@app.task(name="cleanup_procrastinate_jobs")
+async def cleanup_procrastinate_jobs(timestamp: int) -> None:
+    await app.configure_task(
+        name="builtin:procrastinate.builtin_tasks.remove_old_jobs",
+    ).defer_async(max_hours=24 * 7, remove_failed=True)
+
+
 @app.task(name="curate_memory")
 async def curate_memory(*, assistant_id: str, thread_id: str, run_id: str) -> None:
     deps = build_worker_deps()

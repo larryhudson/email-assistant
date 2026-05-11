@@ -1,8 +1,8 @@
 # Hivemind dev stack. Run with `make dev` (which also brings up Postgres).
 #
 # - web: FastAPI app - Mailgun webhook + admin UI. Binds to ${HOST:-127.0.0.1}
-#   and ${PORT:-8000} — set PORT in .env to override (default in .env is 10000
-#   to match the public tunnel address).
+#   and ${PORT:-18788} — set PORT in .env to override. Tailscale Funnel
+#   proxies the public :10000 (in MAILGUN_WEBHOOK_URL) to this local port.
 # - worker: Procrastinate worker — picks up run_agent + curate_memory jobs.
 #   Runs under watchfiles so code edits in src/ restart the worker.
 #   Sends real Mailgun replies. Set EMAIL_AGENT_WORKER_DRY_RUN=true on the

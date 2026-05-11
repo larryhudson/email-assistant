@@ -423,8 +423,9 @@ def web(
         help="Bind host (env: HOST).",
     ),
     port: int = typer.Option(
-        int(os.environ.get("PORT", "8000")),
-        help="Bind port (env: PORT).",
+        int(os.environ.get("PORT", "18788")),
+        help="Bind port (env: PORT). Tailscale Funnel proxies the public "
+        ":10000 to this local port — keep them in sync.",
     ),
     reload: bool = typer.Option(True, help="Auto-reload on file changes (dev default)"),
 ) -> None:
@@ -508,6 +509,16 @@ def worker(
     concurrency: int = typer.Option(1, "--concurrency", help="Async jobs per worker."),
 ) -> None:
     """Run the Procrastinate worker that dispatches run_agent + curate_memory."""
+
+    # Quiet procrastinate's INFO-level per-job lifecycle chatter. The periodic
+    # tick fires every minute and would otherwise log two lines/min forever.
+    # WARNINGs and above still surface so real failures aren't hidden. Override
+    # by setting EMAIL_AGENT_PROCRASTINATE_LOG_LEVEL=INFO when debugging.
+    import logging
+
+    logging.getLogger("procrastinate").setLevel(
+        os.environ.get("EMAIL_AGENT_PROCRASTINATE_LOG_LEVEL", "WARNING").upper()
+    )
 
     async def _run() -> None:
         from email_agent.jobs.app import app as procrastinate_app
