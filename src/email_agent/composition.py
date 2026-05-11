@@ -18,8 +18,7 @@ from email_agent.domain.workspace_projector import EmailWorkspaceProjector
 from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.assistant import AssistantScope
 from email_agent.runtime.assistant_runtime import AssistantRuntime
-from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
-from email_agent.sandbox.workspace import AssistantWorkspace
+from email_agent.sandbox.workspace_provider import InMemoryWorkspaceProvider, WorkspaceProvider
 
 if TYPE_CHECKING:
     from pydantic_ai.models import Model
@@ -98,7 +97,7 @@ def make_runtime_from_settings(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     email_provider: "EmailProvider",
-    workspace: AssistantWorkspace | None = None,
+    workspace_provider: WorkspaceProvider | None = None,
     memory: "MemoryPort | None" = None,
     use_real_model: bool = True,
     use_real_memory: bool = True,
@@ -108,7 +107,7 @@ def make_runtime_from_settings(
 ) -> AssistantRuntime:
     """Compose a fully-wired AssistantRuntime for production-ish use.
 
-    `workspace` defaults to an in-memory workspace when
+    `workspace_provider` defaults to an in-memory provider when
     `use_docker_sandbox=False`. Docker workspace wiring lands with the
     `DockerEnvironmentAdapter` refactor. `memory` defaults to a
     `CogneeMemoryAdapter` (`use_real_memory=True`), falling back to
@@ -118,13 +117,13 @@ def make_runtime_from_settings(
     `use_real_model=True` (default) plumbs through
     `make_fireworks_model_factory(settings)`.
     """
-    if workspace is None:
+    if workspace_provider is None:
         if use_docker_sandbox:
             raise RuntimeError(
                 "Docker workspace wiring now goes through DockerEnvironmentAdapter; "
                 "set use_docker_sandbox=False until that adapter is wired."
             )
-        workspace = AssistantWorkspace(InMemoryEnvironment())
+        workspace_provider = InMemoryWorkspaceProvider()
     if memory is None:
         memory = make_cognee_memory(settings) if use_real_memory else InMemoryMemoryAdapter()
     projector = EmailWorkspaceProjector(run_inputs_root=settings.run_inputs_root)
@@ -152,7 +151,7 @@ def make_runtime_from_settings(
         session_factory,
         attachments_root=settings.attachments_root,
         email_provider=email_provider,
-        workspace=workspace,
+        workspace_provider=workspace_provider,
         memory=memory,
         agent=AssistantAgent(),
         projector=projector,
