@@ -57,14 +57,12 @@ async def test_create_once_persists_row_and_sets_next_run_to_run_at(
     fire_at = now + timedelta(hours=2)
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock_at(now))
 
-    task = await service.create_once(
-        assistant_id="a-1", run_at=fire_at, subject="ping", body="poke"
-    )
+    task = await service.create_once(assistant_id="a-1", run_at=fire_at, name="ping", body="poke")
 
     assert task.kind == ScheduledTaskKind.ONCE
     assert task.next_run_at == fire_at
     assert task.status == ScheduledTaskStatus.ACTIVE
-    assert task.subject == "ping"
+    assert task.name == "ping"
 
     listed = await service.list_for_assistant("a-1")
     assert [t.id for t in listed] == [task.id]
@@ -79,7 +77,7 @@ async def test_create_cron_sets_next_run_from_cron_expr(
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock_at(now))
 
     task = await service.create_cron(
-        assistant_id="a-1", cron_expr="0 * * * *", subject="hourly", body="tick"
+        assistant_id="a-1", cron_expr="0 * * * *", name="hourly", body="tick"
     )
 
     # Next top-of-the-hour after 12:30 is 13:00.
@@ -97,7 +95,7 @@ async def test_create_cron_rejects_invalid_expression(
     )
 
     with pytest.raises(InvalidScheduledTaskError):
-        await service.create_cron(assistant_id="a-1", cron_expr="not a cron", subject="x", body="y")
+        await service.create_cron(assistant_id="a-1", cron_expr="not a cron", name="x", body="y")
 
 
 async def test_list_for_assistant_only_returns_that_assistants_tasks(
@@ -110,10 +108,10 @@ async def test_list_for_assistant_only_returns_that_assistants_tasks(
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock_at(now))
 
     await service.create_once(
-        assistant_id="a-1", run_at=now + timedelta(minutes=5), subject="a", body="a"
+        assistant_id="a-1", run_at=now + timedelta(minutes=5), name="a", body="a"
     )
     await service.create_once(
-        assistant_id="a-2", run_at=now + timedelta(minutes=10), subject="b", body="b"
+        assistant_id="a-2", run_at=now + timedelta(minutes=10), name="b", body="b"
     )
 
     listed = await service.list_for_assistant("a-1")
@@ -152,7 +150,7 @@ async def test_delete_removes_only_matching_task_when_scoped(
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock_at(now))
 
     task = await service.create_once(
-        assistant_id="a-1", run_at=now + timedelta(minutes=5), subject="a", body="a"
+        assistant_id="a-1", run_at=now + timedelta(minutes=5), name="a", body="a"
     )
 
     deleted = await service.delete(assistant_id="a-1", task_id=task.id)
@@ -170,7 +168,7 @@ async def test_delete_refuses_other_assistants_task(
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock_at(now))
 
     task = await service.create_once(
-        assistant_id="a-1", run_at=now + timedelta(minutes=5), subject="a", body="a"
+        assistant_id="a-1", run_at=now + timedelta(minutes=5), name="a", body="a"
     )
 
     deleted = await service.delete(assistant_id="a-2", task_id=task.id)
@@ -199,10 +197,10 @@ async def test_claim_due_returns_active_tasks_with_next_run_in_past(
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock_at(now))
 
     past = await service.create_once(
-        assistant_id="a-1", run_at=now - timedelta(minutes=1), subject="past", body="x"
+        assistant_id="a-1", run_at=now - timedelta(minutes=1), name="past", body="x"
     )
     await service.create_once(
-        assistant_id="a-1", run_at=now + timedelta(hours=1), subject="future", body="x"
+        assistant_id="a-1", run_at=now + timedelta(hours=1), name="future", body="x"
     )
 
     due = await service.claim_due(as_of=now)
@@ -218,7 +216,7 @@ async def test_mark_fired_once_marks_completed(
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock_at(now))
 
     task = await service.create_once(
-        assistant_id="a-1", run_at=now - timedelta(minutes=1), subject="past", body="x"
+        assistant_id="a-1", run_at=now - timedelta(minutes=1), name="past", body="x"
     )
 
     fired_at = now
@@ -238,7 +236,7 @@ async def test_mark_fired_cron_reschedules_next_run(
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock_at(now))
 
     task = await service.create_cron(
-        assistant_id="a-1", cron_expr="0 * * * *", subject="hourly", body="x"
+        assistant_id="a-1", cron_expr="0 * * * *", name="hourly", body="x"
     )
 
     await service.mark_fired(task_id=task.id, fired_at=now)

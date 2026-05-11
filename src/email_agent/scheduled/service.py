@@ -44,7 +44,7 @@ class ScheduledTaskService:
         *,
         assistant_id: str,
         run_at: datetime,
-        subject: str,
+        name: str,
         body: str,
         created_by_run_id: str | None = None,
     ) -> ScheduledTask:
@@ -59,7 +59,7 @@ class ScheduledTaskService:
             next_run_at=run_at,
             last_run_at=None,
             status=ScheduledTaskStatus.ACTIVE.value,
-            subject=subject,
+            name=name,
             body=body,
             created_by_run_id=created_by_run_id,
         )
@@ -74,7 +74,7 @@ class ScheduledTaskService:
         *,
         assistant_id: str,
         cron_expr: str,
-        subject: str,
+        name: str,
         body: str,
         created_by_run_id: str | None = None,
     ) -> ScheduledTask:
@@ -96,7 +96,7 @@ class ScheduledTaskService:
             next_run_at=next_run,
             last_run_at=None,
             status=ScheduledTaskStatus.ACTIVE.value,
-            subject=subject,
+            name=name,
             body=body,
             created_by_run_id=created_by_run_id,
         )
@@ -212,7 +212,7 @@ def _to_domain(row: ScheduledTaskRow) -> ScheduledTask:
         next_run_at=next_run_at,
         last_run_at=_aware(row.last_run_at),
         status=ScheduledTaskStatus(row.status),
-        subject=row.subject,
+        name=row.name,
         body=row.body,
         created_by_run_id=row.created_by_run_id,
         created_at=created_at,

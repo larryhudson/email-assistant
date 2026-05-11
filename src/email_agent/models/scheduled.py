@@ -34,7 +34,7 @@ class ScheduledTask(BaseModel):
     next_run_at: datetime
     last_run_at: datetime | None
     status: ScheduledTaskStatus
-    subject: str
+    name: str
     body: str
     created_by_run_id: str | None
     created_at: datetime

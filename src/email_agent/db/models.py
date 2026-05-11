@@ -202,6 +202,9 @@ class AgentRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    triggered_by_scheduled_task_id: Mapped[str | None] = mapped_column(
+        ForeignKey("scheduled_tasks.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class RunStep(Base):
@@ -278,7 +281,7 @@ class ScheduledTaskRow(Base):
     next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="active")
-    subject: Mapped[str] = mapped_column(String(998))
+    name: Mapped[str] = mapped_column(String(998))
     body: Mapped[str] = mapped_column(Text)
     created_by_run_id: Mapped[str | None] = mapped_column(
         ForeignKey("agent_runs.id"), nullable=True

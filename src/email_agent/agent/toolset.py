@@ -19,7 +19,7 @@ class _ScheduledTasksLike(Protocol):
         *,
         assistant_id: str,
         run_at: datetime,
-        subject: str,
+        name: str,
         body: str,
         created_by_run_id: str | None = None,
     ) -> ScheduledTask: ...
@@ -29,7 +29,7 @@ class _ScheduledTasksLike(Protocol):
         *,
         assistant_id: str,
         cron_expr: str,
-        subject: str,
+        name: str,
         body: str,
         created_by_run_id: str | None = None,
     ) -> ScheduledTask: ...
@@ -121,17 +121,19 @@ class AgentToolset:
             return []
         return await self._scheduled_tasks.list_for_assistant(self._assistant_id)
 
-    async def create_scheduled_task(self, kind: str, when: str, subject: str, body: str) -> str:
+    async def create_scheduled_task(self, kind: str, when: str, name: str, body: str) -> str:
         """Create a scheduled synthetic-inbound task for this assistant.
 
         `kind` is 'once' or 'cron'. For 'once', `when` is an ISO-8601
         timezone-aware datetime; for 'cron', `when` is a 5-field cron
-        expression. `subject` + `body` populate the synthetic inbound.
+        expression. `name` is a short human-readable label (also used as
+        the synthetic inbound's subject); `body` is the prompt the agent
+        will receive when the task fires.
         """
         if self._scheduled_tasks is None:
             return _tool_error("create_scheduled_task", "scheduled tasks not configured")
-        if not subject:
-            return _tool_error("create_scheduled_task", "subject must not be empty")
+        if not name:
+            return _tool_error("create_scheduled_task", "name must not be empty")
         if not body:
             return _tool_error("create_scheduled_task", "body must not be empty")
 
@@ -141,7 +143,7 @@ class AgentToolset:
                 task = await self._scheduled_tasks.create_once(
                     assistant_id=self._assistant_id,
                     run_at=run_at,
-                    subject=subject,
+                    name=name,
                     body=body,
                     created_by_run_id=self._run_id,
                 )
@@ -149,7 +151,7 @@ class AgentToolset:
                 task = await self._scheduled_tasks.create_cron(
                     assistant_id=self._assistant_id,
                     cron_expr=when,
-                    subject=subject,
+                    name=name,
                     body=body,
                     created_by_run_id=self._run_id,
                 )

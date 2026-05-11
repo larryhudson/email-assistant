@@ -35,7 +35,7 @@ def upgrade() -> None:
         sa.Column("next_run_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("last_run_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("status", sa.String(length=16), nullable=False, server_default="active"),
-        sa.Column("subject", sa.String(length=998), nullable=False),
+        sa.Column("name", sa.String(length=998), nullable=False),
         sa.Column("body", sa.Text(), nullable=False),
         sa.Column(
             "created_by_run_id",

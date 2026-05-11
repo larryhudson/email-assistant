@@ -87,14 +87,14 @@ async def test_create_scheduled_task_once_persists_under_assistant_scope(
 
     fire_at = now + timedelta(hours=1)
     result = await toolset.create_scheduled_task(
-        kind="once", when=fire_at.isoformat(), subject="ping", body="ping"
+        kind="once", when=fire_at.isoformat(), name="ping", body="ping"
     )
 
     assert "created" in result
     listed = await service.list_for_assistant("a-1")
     assert len(listed) == 1
     assert listed[0].kind == ScheduledTaskKind.ONCE
-    assert listed[0].subject == "ping"
+    assert listed[0].name == "ping"
 
 
 async def test_create_scheduled_task_cron_uses_cron_expression(
@@ -107,7 +107,7 @@ async def test_create_scheduled_task_cron_uses_cron_expression(
     toolset = _toolset(service)
 
     result = await toolset.create_scheduled_task(
-        kind="cron", when="0 * * * *", subject="hourly", body="tick"
+        kind="cron", when="0 * * * *", name="hourly", body="tick"
     )
 
     assert "created" in result
@@ -126,7 +126,7 @@ async def test_create_scheduled_task_rejects_invalid_kind(
     toolset = _toolset(service)
 
     result = await toolset.create_scheduled_task(
-        kind="weekly", when="0 * * * *", subject="x", body="x"
+        kind="weekly", when="0 * * * *", name="x", body="x"
     )
     assert "ERROR" in result
 
@@ -140,9 +140,7 @@ async def test_create_scheduled_task_rejects_bad_once_datetime(
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock(now))
     toolset = _toolset(service)
 
-    result = await toolset.create_scheduled_task(
-        kind="once", when="not a date", subject="x", body="x"
-    )
+    result = await toolset.create_scheduled_task(kind="once", when="not a date", name="x", body="x")
     assert "ERROR" in result
 
 
@@ -154,16 +152,16 @@ async def test_list_scheduled_tasks_returns_only_this_assistant(
     now = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock(now))
     await service.create_once(
-        assistant_id="a-1", run_at=now + timedelta(hours=1), subject="mine", body="x"
+        assistant_id="a-1", run_at=now + timedelta(hours=1), name="mine", body="x"
     )
     await service.create_once(
-        assistant_id="a-2", run_at=now + timedelta(hours=1), subject="theirs", body="x"
+        assistant_id="a-2", run_at=now + timedelta(hours=1), name="theirs", body="x"
     )
 
     listed = await _toolset(service).list_scheduled_tasks()
 
     assert {t.assistant_id for t in listed} == {"a-1"}
-    assert [t.subject for t in listed] == ["mine"]
+    assert [t.name for t in listed] == ["mine"]
 
 
 async def test_delete_scheduled_task_only_deletes_self_owned(
@@ -174,10 +172,10 @@ async def test_delete_scheduled_task_only_deletes_self_owned(
     now = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock(now))
     mine = await service.create_once(
-        assistant_id="a-1", run_at=now + timedelta(hours=1), subject="mine", body="x"
+        assistant_id="a-1", run_at=now + timedelta(hours=1), name="mine", body="x"
     )
     theirs = await service.create_once(
-        assistant_id="a-2", run_at=now + timedelta(hours=1), subject="theirs", body="x"
+        assistant_id="a-2", run_at=now + timedelta(hours=1), name="theirs", body="x"
     )
 
     toolset = _toolset(service)
@@ -188,7 +186,7 @@ async def test_delete_scheduled_task_only_deletes_self_owned(
     assert [t.id for t in await service.list_for_assistant("a-2")] == [theirs.id]
 
 
-@pytest.mark.parametrize("missing_field", ["subject", "body"])
+@pytest.mark.parametrize("missing_field", ["name", "body"])
 async def test_create_scheduled_task_validates_required_text(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
     missing_field: str,
@@ -199,7 +197,7 @@ async def test_create_scheduled_task_validates_required_text(
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock(now))
     toolset = _toolset(service)
 
-    kwargs = {"subject": "s", "body": "b"}
+    kwargs = {"name": "s", "body": "b"}
     kwargs[missing_field] = ""
     result = await toolset.create_scheduled_task(
         kind="once", when=(now + timedelta(hours=1)).isoformat(), **kwargs

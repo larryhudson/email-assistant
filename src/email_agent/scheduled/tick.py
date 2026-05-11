@@ -24,18 +24,20 @@ from typing import TYPE_CHECKING, Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from email_agent.db.models import Assistant, ScheduledTaskRow
+from email_agent.db.models import AgentRun, Assistant, EndUser, ScheduledTaskRow
 from email_agent.models.email import NormalizedInboundEmail
 from email_agent.models.scheduled import ScheduledTaskStatus
+from email_agent.runtime.assistant_runtime import Accepted, Dropped
 
 if TYPE_CHECKING:
+    from email_agent.runtime.assistant_runtime import AcceptOutcome
     from email_agent.scheduled.service import ScheduledTaskService
 
 logger = logging.getLogger(__name__)
 
 
 class _RuntimeLike(Protocol):
-    async def accept_inbound(self, email: NormalizedInboundEmail): ...
+    async def accept_inbound(self, email: NormalizedInboundEmail) -> AcceptOutcome: ...
 
 
 async def tick_scheduled_tasks_impl(
@@ -72,10 +74,19 @@ async def tick_scheduled_tasks_impl(
             if assistant is None:
                 logger.warning("scheduled_task %s references missing assistant", row.id)
                 continue
+            end_user = await session.get(EndUser, assistant.end_user_id)
+            if end_user is None:
+                logger.warning("scheduled_task %s references missing end_user", row.id)
+                continue
 
-            email = _build_synthetic_inbound(assistant.inbound_address, row, now)
+            email = _build_synthetic_inbound(
+                from_email=end_user.email,
+                to_email=assistant.inbound_address,
+                row=row,
+                now=now,
+            )
             try:
-                await runtime.accept_inbound(email)
+                outcome = await runtime.accept_inbound(email)
             except Exception:
                 logger.exception(
                     "scheduled_task %s failed to dispatch; leaving active for retry",
@@ -83,25 +94,68 @@ async def tick_scheduled_tasks_impl(
                 )
                 continue
 
+            if isinstance(outcome, Dropped):
+                logger.warning(
+                    "scheduled_task %s dropped by router: %s (%s); leaving active",
+                    row.id,
+                    outcome.reason,
+                    outcome.detail,
+                )
+                continue
+
+            assert isinstance(outcome, Accepted)
+            await _tag_run_with_trigger(
+                session_factory,
+                inbound_message_id=outcome.message_id,
+                scheduled_task_id=row.id,
+            )
             await service.mark_fired(task_id=row.id, fired_at=now)
 
         await session.commit()
 
 
 def _build_synthetic_inbound(
-    inbound_address: str, row: ScheduledTaskRow, now: datetime
+    *,
+    from_email: str,
+    to_email: str,
+    row: ScheduledTaskRow,
+    now: datetime,
 ) -> NormalizedInboundEmail:
+    marker = f"[Triggered by scheduled task {row.name!r} ({row.id}) at {now.isoformat()}]\n\n"
     return NormalizedInboundEmail(
         provider_message_id=f"sched-{uuid.uuid4().hex[:12]}",
         message_id_header=f"<sched-{uuid.uuid4().hex[:12]}@email-agent>",
         in_reply_to_header=None,
         references_headers=[],
-        from_email=inbound_address,
-        to_emails=[inbound_address],
-        subject=row.subject,
-        body_text=row.body,
+        from_email=from_email,
+        to_emails=[to_email],
+        subject=row.name,
+        body_text=marker + row.body,
         received_at=now,
     )
+
+
+async def _tag_run_with_trigger(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    inbound_message_id: str,
+    scheduled_task_id: str,
+) -> None:
+    async with session_factory() as session:
+        run = (
+            await session.execute(
+                select(AgentRun).where(AgentRun.inbound_message_id == inbound_message_id)
+            )
+        ).scalar_one_or_none()
+        if run is None:
+            logger.warning(
+                "scheduled_task %s: no AgentRun for inbound_message_id=%s",
+                scheduled_task_id,
+                inbound_message_id,
+            )
+            return
+        run.triggered_by_scheduled_task_id = scheduled_task_id
+        await session.commit()
 
 
 __all__ = ["tick_scheduled_tasks_impl"]
