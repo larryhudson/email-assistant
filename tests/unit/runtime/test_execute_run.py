@@ -196,7 +196,7 @@ async def test_execute_run_sends_reply_and_records_completion(
     # Reply was sent through the email provider.
     assert len(email_provider.sent) == 1
     sent = email_provider.sent[0]
-    assert sent.body_text == "Re: thanks!"
+    assert sent.body_text.startswith("Re: thanks!")
     assert sent.in_reply_to_header == "<m1@x>"
     assert sent.references_headers == ["<m1@x>"]
     assert sent.subject == "Re: hello?"

@@ -166,6 +166,7 @@ def make_runtime_from_settings(
         model_factory=model_factory,
         run_timeout_seconds=run_timeout_seconds,
         run_agent_defer=run_agent_defer,
+        admin_base_url=settings.admin_base_url,
     )
 
 

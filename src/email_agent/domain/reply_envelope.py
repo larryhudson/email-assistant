@@ -1,7 +1,10 @@
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from markdown_it import MarkdownIt
 
+from email_agent.domain.run_footer import render_run_footer
+from email_agent.models.agent import RunUsage
 from email_agent.models.email import (
     EmailAttachment,
     NormalizedInboundEmail,
@@ -24,6 +27,15 @@ def render_markdown_to_html(body_text: str) -> str:
     return _MD.render(body_text)
 
 
+@dataclass(frozen=True)
+class RunFooterContext:
+    """Inputs needed to render the cost/run footer on outbound replies."""
+
+    usage: RunUsage
+    run_id: str
+    admin_base_url: str | None
+
+
 class ReplyEnvelopeBuilder:
     """Single home for the reply-envelope rules.
 
@@ -42,15 +54,28 @@ class ReplyEnvelopeBuilder:
         body_text: str,
         attachments: list[EmailAttachment],
         message_id_factory: Callable[[], str],
+        run_footer: RunFooterContext | None = None,
     ) -> NormalizedOutboundEmail:
         rendered = render_markdown_to_html(body_text)
-        body_html = rendered or None
+        final_text = body_text
+        final_html = rendered or None
+
+        if run_footer is not None:
+            footer = render_run_footer(
+                run_footer.usage,
+                run_id=run_footer.run_id,
+                admin_base_url=run_footer.admin_base_url,
+            )
+            final_text = f"{body_text}\n{footer.text}" if body_text else footer.text
+            html_body = rendered if rendered else ""
+            final_html = f"{html_body}\n{footer.html}" if html_body else footer.html
+
         return NormalizedOutboundEmail(
             from_email=from_email,
             to_emails=[inbound.from_email],
             subject=_re_prefixed(inbound.subject),
-            body_text=body_text,
-            body_html=body_html,
+            body_text=final_text,
+            body_html=final_html,
             message_id_header=message_id_factory(),
             in_reply_to_header=inbound.message_id_header,
             references_headers=[*inbound.references_headers, inbound.message_id_header],
@@ -64,4 +89,4 @@ def _re_prefixed(subject: str) -> str:
     return f"Re: {subject}"
 
 
-__all__ = ["ReplyEnvelopeBuilder", "render_markdown_to_html"]
+__all__ = ["ReplyEnvelopeBuilder", "RunFooterContext", "render_markdown_to_html"]

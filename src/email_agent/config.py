@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import HttpUrl, PostgresDsn, SecretStr
+from pydantic import AliasChoices, Field, HttpUrl, PostgresDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -62,3 +62,10 @@ class Settings(BaseSettings):
     admin_bind_port: int = 8001
     admin_basic_auth_username: str | None = None
     admin_basic_auth_password: SecretStr | None = None
+
+    # Public base URL of the admin UI. When set, the cost/run footer appended
+    # to outbound replies includes a deep-link to the run's admin trace page.
+    admin_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("EMAIL_AGENT_ADMIN_BASE_URL", "ADMIN_BASE_URL"),
+    )
