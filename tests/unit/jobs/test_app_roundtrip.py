@@ -40,10 +40,40 @@ async def test_run_agent_defer_then_worker_invokes_runtime() -> None:
         return outcome.__class__.__name__
 
     async with test_app.open_async():
-        await run_agent.configure(queueing_lock="assistant-a-1").defer_async(run_id="r-42")
+        await run_agent.configure(lock="assistant-a-1").defer_async(run_id="r-42")
         await test_app.run_worker_async(wait=False)
 
     assert seen == ["r-42"]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_lock_allows_multiple_queued_runs_for_same_assistant() -> None:
+    seen: list[str] = []
+
+    class _StubRuntime:
+        async def execute_run(self, run_id: str) -> object:
+            seen.append(run_id)
+
+            class _Outcome:
+                pass
+
+            return _Outcome()
+
+    test_app = App(connector=InMemoryConnector())
+
+    @test_app.task(name="run_agent")
+    async def run_agent(run_id: str) -> str:
+        from email_agent.jobs.run_agent import run_agent_impl
+
+        outcome = await run_agent_impl(run_id=run_id, runtime=_StubRuntime())  # ty: ignore[invalid-argument-type]
+        return outcome.__class__.__name__
+
+    async with test_app.open_async():
+        await run_agent.configure(lock="assistant-a-1").defer_async(run_id="r-1")
+        await run_agent.configure(lock="assistant-a-1").defer_async(run_id="r-2")
+        await test_app.run_worker_async(wait=False)
+
+    assert seen == ["r-1", "r-2"]
 
 
 @pytest.mark.asyncio

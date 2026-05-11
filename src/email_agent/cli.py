@@ -1,4 +1,5 @@
 import asyncio
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -494,6 +495,44 @@ def worker(
             await procrastinate_app.run_worker_async(**worker_kwargs)  # ty: ignore[invalid-argument-type]
 
     asyncio.run(_run())
+
+
+@app.command("worker-dev")
+def worker_dev(
+    queues: list[str] | None = typer.Option(
+        None,
+        "--queue",
+        help="Listen only on these queues (repeatable). Default: all queues.",
+    ),
+    concurrency: int = typer.Option(1, "--concurrency", help="Async jobs per worker."),
+    reload_dirs: list[Path] | None = typer.Option(
+        None,
+        "--reload-dir",
+        help="Directory to watch for worker reloads (repeatable). Default: src.",
+    ),
+) -> None:
+    """Run the Procrastinate worker with auto-reload for local development."""
+    from watchfiles import run_process
+
+    command_args = ["-m", "email_agent.cli", "worker", "--concurrency", str(concurrency)]
+    for queue in queues or []:
+        command_args.extend(["--queue", queue])
+
+    watch_paths = [str(path) for path in (reload_dirs or [Path("src")])]
+
+    def _changed(changes: set[tuple[object, str]]) -> None:
+        changed = ", ".join(sorted({path for _, path in changes})[:3])
+        suffix = f": {changed}" if changed else ""
+        typer.secho(f"reloading worker{suffix}", fg="yellow")
+
+    raise typer.Exit(
+        run_process(
+            *watch_paths,
+            target=shlex.join([sys.executable, *command_args]),
+            target_type="command",
+            callback=_changed,
+        )
+    )
 
 
 if __name__ == "__main__":

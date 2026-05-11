@@ -4,10 +4,10 @@ Body is a thin delegation to `runtime.execute_run(run_id)`. The task is
 queued by `AssistantRuntime.accept_inbound` (after the queued AgentRun
 row commits) and dispatched by a Procrastinate worker.
 
-Per-assistant serialization is enforced via `queueing_lock` set at
-deferral time (`task.configure(queueing_lock=f"assistant-{assistant_id}")`)
-in `accept_inbound` — keeping multiple inbounds for the same assistant
-running sequentially while different assistants run in parallel.
+Per-assistant serialization is enforced via `lock` set at deferral time
+(`task.configure(lock=f"assistant-{assistant_id}")`) — keeping multiple
+inbounds for the same assistant running sequentially while still allowing
+more than one run to be queued.
 """
 
 from __future__ import annotations

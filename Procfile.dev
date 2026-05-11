@@ -2,7 +2,8 @@
 #
 # - web: FastAPI app - Mailgun webhook + admin UI at http://127.0.0.1:18788/admin/
 # - worker: Procrastinate worker — picks up run_agent + curate_memory jobs.
+#   Runs under watchfiles so code edits in src/ restart the worker.
 #   Sends real Mailgun replies. Set EMAIL_AGENT_WORKER_DRY_RUN=true on the
 #   worker line to suppress sends during local testing.
 web: uv run email-agent web --host 127.0.0.1 --port 18788
-worker: uv run email-agent worker
+worker: uv run email-agent worker-dev

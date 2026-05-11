@@ -151,13 +151,13 @@ async def curate_memory(*, assistant_id: str, thread_id: str, run_id: str) -> No
 async def defer_run_agent(*, run_id: str, assistant_id: str) -> None:
     """Production `run_agent_defer` callback for `AssistantRuntime`.
 
-    Sets `queueing_lock=f"assistant-{assistant_id}"` so concurrent inbounds
-    for the same assistant serialize while different assistants run in
-    parallel. Caller is responsible for opening `app` (workers do it on
-    startup; CLI / webhook entry points wrap the call in
-    `async with app.open_async():`).
+    Sets `lock=f"assistant-{assistant_id}"` so concurrent inbounds for the
+    same assistant serialize at execution time while still allowing multiple
+    queued runs. Different assistants can run in parallel. Caller is
+    responsible for opening `app` (workers do it on startup; CLI / webhook
+    entry points wrap the call in `async with app.open_async():`).
     """
-    await run_agent.configure(queueing_lock=f"assistant-{assistant_id}").defer_async(run_id=run_id)
+    await run_agent.configure(lock=f"assistant-{assistant_id}").defer_async(run_id=run_id)
 
 
 async def defer_curate_memory(*, assistant_id: str, thread_id: str, run_id: str) -> None:
