@@ -136,6 +136,31 @@ async def run_agent(run_id: str) -> str:
     return outcome.__class__.__name__
 
 
+@app.periodic(cron="* * * * *")
+@app.task(name="tick_scheduled_tasks")
+async def tick_scheduled_tasks(timestamp: int) -> int:
+    """Fire any due scheduled_tasks rows.
+
+    Procrastinate calls this once per minute with the cron-fire timestamp.
+    We translate that into a UTC `datetime` and delegate to the pure-domain
+    implementation. Returns the count of rows dispatched for observability.
+    """
+    from datetime import UTC, datetime
+
+    from email_agent.scheduled.tick import tick_scheduled_tasks_impl
+
+    deps = build_worker_deps()
+    now = datetime.fromtimestamp(timestamp, tz=UTC)
+    before = await deps.runtime.scheduled_tasks.claim_due(as_of=now)
+    await tick_scheduled_tasks_impl(
+        runtime=deps.runtime,
+        service=deps.runtime.scheduled_tasks,
+        session_factory=deps.session_factory,
+        now=now,
+    )
+    return len(before)
+
+
 @app.task(name="curate_memory")
 async def curate_memory(*, assistant_id: str, thread_id: str, run_id: str) -> None:
     deps = build_worker_deps()
@@ -178,4 +203,5 @@ __all__ = [
     "defer_run_agent",
     "make_procrastinate_app",
     "run_agent",
+    "tick_scheduled_tasks",
 ]
