@@ -156,6 +156,7 @@ async def _upsert_outbound_message(
         to_emails=list(envelope.to_emails),
         subject=envelope.subject,
         body_text=envelope.body_text,
+        body_html=envelope.body_html,
     )
     session.add(outbound)
     await session.flush()

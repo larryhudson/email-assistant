@@ -15,6 +15,7 @@ def _envelope(**overrides) -> NormalizedOutboundEmail:
         to_emails=overrides.pop("to_emails", ["mum@example.com"]),
         subject=overrides.pop("subject", "Re: Question?"),
         body_text=overrides.pop("body_text", "Sorry, the assistant is at its monthly cap."),
+        body_html=overrides.pop("body_html", None),
         message_id_header=overrides.pop("message_id_header", "<run-abc@assistants.example.com>"),
         in_reply_to_header=overrides.pop("in_reply_to_header", "<m1@x>"),
         references_headers=overrides.pop("references_headers", ["<r0@x>", "<m1@x>"]),
@@ -152,6 +153,41 @@ async def test_send_reply_attaches_files(mock_transport_factory):
     assert f["filename"] == "report.pdf"
     assert f["content_type"] == "application/pdf"
     assert f["data"] == b"%PDF-1.7"
+
+
+async def test_send_reply_posts_html_when_body_html_set(mock_transport_factory):
+    transport, captured = mock_transport_factory(
+        httpx.Response(200, json={"id": "<x@y>", "message": "Queued"})
+    )
+    provider = MailgunEmailProvider(
+        signing_key="sig",
+        api_key="key-123",
+        domain="mg.example.com",
+        transport=transport,
+    )
+
+    await provider.send_reply(_envelope(body_html="<p>hi</p>"))
+
+    fields, _ = _request_fields(captured[0])
+    assert fields["text"] == ["Sorry, the assistant is at its monthly cap."]
+    assert fields["html"] == ["<p>hi</p>"]
+
+
+async def test_send_reply_omits_html_field_when_body_html_none(mock_transport_factory):
+    transport, captured = mock_transport_factory(
+        httpx.Response(200, json={"id": "<x@y>", "message": "Queued"})
+    )
+    provider = MailgunEmailProvider(
+        signing_key="sig",
+        api_key="key-123",
+        domain="mg.example.com",
+        transport=transport,
+    )
+
+    await provider.send_reply(_envelope(body_html=None))
+
+    fields, _ = _request_fields(captured[0])
+    assert "html" not in fields
 
 
 async def test_send_reply_raises_typed_error_on_http_failure(mock_transport_factory):
