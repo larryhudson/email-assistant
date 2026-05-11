@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Spin up an isolated dev worktree on a new branch, with its own DB and
+# .env. Lets you delegate work to subagents (or just experiment) without
+# touching the main checkout.
+#
+# Usage: scripts/dev-worktree-up <name> [port]
+#   name   used as branch suffix (feat/<name>), worktree dir name
+#          (../email-assistant-<name>), and DB name (email_agent_<name>)
+#   port   dev server port for Procfile.dev (default 18789)
+set -euo pipefail
+
+NAME="${1:?usage: dev-worktree-up <name> [port]}"
+PORT="${2:-18789}"
+ROOT="$(git rev-parse --show-toplevel)"
+PARENT="$(dirname "$ROOT")"
+WORKTREE="$PARENT/email-assistant-$NAME"
+BRANCH="feat/$NAME"
+DB="email_agent_$NAME"
+POSTGRES_CONTAINER="email-assistant-postgres-1"
+
+if [[ ! "$NAME" =~ ^[a-z0-9_-]+$ ]]; then
+    echo "name must match [a-z0-9_-]+ (got: $NAME)" >&2
+    exit 1
+fi
+
+if [ -e "$WORKTREE" ]; then
+    echo "worktree path already exists: $WORKTREE" >&2
+    exit 1
+fi
+if git -C "$ROOT" rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+    echo "branch already exists: $BRANCH" >&2
+    exit 1
+fi
+if ! docker ps --format '{{.Names}}' | grep -q "^$POSTGRES_CONTAINER\$"; then
+    echo "postgres container not running ($POSTGRES_CONTAINER). Run: make db-up" >&2
+    exit 1
+fi
+if [ ! -f "$ROOT/.env" ]; then
+    echo "missing $ROOT/.env — copy .env.example and fill it in first" >&2
+    exit 1
+fi
+
+echo "→ creating database $DB"
+docker exec -i "$POSTGRES_CONTAINER" psql -U email_agent -d email_agent \
+    -c "CREATE DATABASE $DB;"
+
+echo "→ creating worktree at $WORKTREE on $BRANCH"
+git -C "$ROOT" worktree add "$WORKTREE" -b "$BRANCH" main
+
+echo "→ writing .env (DATABASE_URL → $DB)"
+sed -e "s|/email_agent$|/$DB|" "$ROOT/.env" > "$WORKTREE/.env"
+
+echo "→ rewriting Procfile.dev port → $PORT"
+sed -i "s/--port 18788/--port $PORT/" "$WORKTREE/Procfile.dev"
+
+echo "→ uv sync"
+(cd "$WORKTREE" && uv sync --quiet)
+
+echo "→ pre-commit install"
+(cd "$WORKTREE" && uv run pre-commit install >/dev/null)
+
+echo "→ alembic upgrade head"
+(cd "$WORKTREE" && uv run alembic upgrade head)
+
+cat <<EOF
+
+ready:
+  worktree: $WORKTREE
+  branch:   $BRANCH
+  db:       $DB
+  port:     $PORT
+
+cd into the worktree to start working. when done:
+  scripts/dev-worktree-down $NAME [--drop-db]
+EOF

@@ -1,4 +1,4 @@
-.PHONY: dev db-up db-down migrate test
+.PHONY: dev db-up db-down migrate test worktree-up worktree-down
 
 # Bring up the dev process stack: Postgres (docker), web + worker (hivemind).
 # Web binds to 127.0.0.1:18788; worker sends real Mailgun replies by default.
@@ -23,3 +23,13 @@ migrate:
 
 test:
 	uv run pytest tests/unit -q
+
+# Spin up an isolated dev worktree on its own branch + DB.
+# Usage: make worktree-up name=foo [port=18789]
+worktree-up:
+	@./scripts/dev-worktree-up "$(name)" "$(port)"
+
+# Tear down a dev worktree. Pass drop_db=1 to also DROP the postgres database.
+# Usage: make worktree-down name=foo [drop_db=1]
+worktree-down:
+	@./scripts/dev-worktree-down "$(name)" $(if $(drop_db),--drop-db,)

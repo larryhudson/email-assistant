@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Tear down a dev worktree created by dev-worktree-up. Optionally drop
+# its postgres database too.
+#
+# Usage: scripts/dev-worktree-down <name> [--drop-db]
+#   --drop-db   also DROP DATABASE email_agent_<name> (destructive).
+#               Without it, the DB is retained so you can poke at the
+#               state after the worktree is gone.
+#
+# Note: removing the worktree uses `sudo rm -rf` because the docker-backed
+# sandbox writes root-owned files into data/sandboxes inside the worktree.
+set -euo pipefail
+
+NAME="${1:?usage: dev-worktree-down <name> [--drop-db]}"
+DROP_DB="${2:-}"
+ROOT="$(git rev-parse --show-toplevel)"
+PARENT="$(dirname "$ROOT")"
+WORKTREE="$PARENT/email-assistant-$NAME"
+BRANCH="feat/$NAME"
+DB="email_agent_$NAME"
+POSTGRES_CONTAINER="email-assistant-postgres-1"
+
+if [[ ! "$NAME" =~ ^[a-z0-9_-]+$ ]]; then
+    echo "name must match [a-z0-9_-]+ (got: $NAME)" >&2
+    exit 1
+fi
+
+if [ -d "$WORKTREE" ]; then
+    echo "→ removing worktree $WORKTREE"
+    sudo rm -rf "$WORKTREE"
+else
+    echo "(no worktree dir at $WORKTREE — skipping)"
+fi
+
+echo "→ pruning git worktree metadata"
+git -C "$ROOT" worktree prune
+
+if git -C "$ROOT" rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+    echo "→ deleting local branch $BRANCH"
+    git -C "$ROOT" branch -D "$BRANCH"
+else
+    echo "(no local branch $BRANCH — skipping)"
+fi
+
+if [ "$DROP_DB" = "--drop-db" ]; then
+    if docker ps --format '{{.Names}}' | grep -q "^$POSTGRES_CONTAINER\$"; then
+        echo "→ dropping database $DB"
+        docker exec -i "$POSTGRES_CONTAINER" psql -U email_agent -d email_agent \
+            -c "DROP DATABASE IF EXISTS $DB;"
+    else
+        echo "(postgres container not running — skipping DB drop)" >&2
+    fi
+else
+    echo "(database $DB retained — pass --drop-db to remove it)"
+fi
