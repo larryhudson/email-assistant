@@ -107,9 +107,8 @@ def make_runtime_from_settings(
 ) -> AssistantRuntime:
     """Compose a fully-wired AssistantRuntime for production-ish use.
 
-    `workspace_provider` defaults to an in-memory provider when
-    `use_docker_sandbox=False`. Docker workspace wiring lands with the
-    `DockerEnvironmentAdapter` refactor. `memory` defaults to a
+    `workspace_provider` defaults to `DockerWorkspaceProvider`, or to an
+    in-memory provider when `use_docker_sandbox=False`. `memory` defaults to a
     `CogneeMemoryAdapter` (`use_real_memory=True`), falling back to
     `InMemoryMemoryAdapter` when the toggle is off — useful for offline
     iteration without an embedding API key. `use_real_model=False` skips

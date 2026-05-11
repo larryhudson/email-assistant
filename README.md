@@ -48,7 +48,8 @@ gets a `Protocol` in `port.py` plus adapter modules next to it:
 
 - `mail/` — `EmailProvider` (`mailgun.py`, `inmemory.py`)
 - `memory/` — `MemoryPort` (`cognee.py`, `inmemory.py`)
-- `sandbox/` — `AssistantSandbox` (`docker.py`, `inmemory.py`)
+- `sandbox/` — workspace execution abstractions: `SandboxEnvironment`,
+  `AssistantWorkspace`, `WorkspaceProvider`, plus Docker/in-memory adapters
 - `models/` — frozen pydantic data models shared across boundaries
 - `db/` — SQLAlchemy 2.0 async ORM + Alembic migrations
 - `domain/` — pure orchestration (router, thread resolver, budget governor, recorder)
@@ -160,7 +161,7 @@ src/email_agent/
   memory/        MemoryPort + Cognee + in-memory adapters
   models/        frozen pydantic wire models
   runtime/       AssistantRuntime
-  sandbox/       AssistantSandbox + Docker + in-memory adapters
+  sandbox/       SandboxEnvironment, AssistantWorkspace, workspace providers
   web/           FastAPI app, Mailgun webhook, admin UI
 
 tests/
