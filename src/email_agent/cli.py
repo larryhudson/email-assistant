@@ -215,6 +215,12 @@ def seed_assistant(
     owner_name: str = typer.Option(
         "Operator", "--owner-name", help="Owner row name (created if missing)."
     ),
+    owner_email: str | None = typer.Option(
+        None,
+        "--owner-email",
+        help="Admin email — recipient of run-failure notifications. Required "
+        "when creating a new owner; ignored when the owner row already exists.",
+    ),
     monthly_budget_usd: float = typer.Option(
         10.00, "--monthly-budget-usd", help="Monthly cap in USD (default $10.00)."
     ),
@@ -267,6 +273,7 @@ def seed_assistant(
             end_user_email=end_user_email,
             end_user_name=end_user_name,
             owner_name=owner_name,
+            owner_email=owner_email,
             monthly_budget_usd=_Decimal(str(monthly_budget_usd)),
             model=model,
             system_prompt=prompt_text,
@@ -282,6 +289,7 @@ async def _seed_assistant(
     end_user_email: str,
     end_user_name: str | None,
     owner_name: str,
+    owner_email: str | None,
     monthly_budget_usd,  # Decimal at runtime (untyped to keep imports lazy in this module)
     model: str | None,
     system_prompt: str,
@@ -326,7 +334,17 @@ async def _seed_assistant(
             await session.execute(select(Owner).where(Owner.name == owner_name))
         ).scalar_one_or_none()
         if owner is None:
-            owner = Owner(id=f"o-{uuid.uuid4().hex[:8]}", name=owner_name)
+            if not owner_email:
+                typer.secho(
+                    "--owner-email is required when creating a new owner.",
+                    fg="red",
+                )
+                raise typer.Exit(2)
+            owner = Owner(
+                id=f"o-{uuid.uuid4().hex[:8]}",
+                name=owner_name,
+                email=owner_email,
+            )
             session.add(owner)
             await session.flush()
 

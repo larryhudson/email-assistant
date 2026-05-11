@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -34,6 +35,10 @@ from email_agent.domain.budget_governor import (
     BudgetLimitReply,
 )
 from email_agent.domain.budget_reply import build_budget_limit_reply
+from email_agent.domain.error_envelope import (
+    build_end_user_error_envelope,
+    build_owner_error_envelope,
+)
 from email_agent.domain.inbound_persister import persist_inbound
 from email_agent.domain.reply_envelope import ReplyEnvelopeBuilder, RunFooterContext
 from email_agent.domain.router import (
@@ -46,7 +51,7 @@ from email_agent.domain.run_footer import strip_footer
 from email_agent.domain.run_recorder import CompletedRun, RunRecorder
 from email_agent.domain.thread_resolver import ThreadResolver
 from email_agent.domain.workspace_projector import EmailWorkspaceProjector
-from email_agent.models.agent import AgentDeps
+from email_agent.models.agent import AgentDeps, AgentRunError
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.email import (
     EmailAttachment,
@@ -60,6 +65,8 @@ from email_agent.sandbox.skills import render_context_block, render_skills_block
 from email_agent.sandbox.workspace import AssistantWorkspace
 from email_agent.sandbox.workspace_provider import WorkspaceProvider
 from email_agent.scheduled.service import ScheduledTaskService
+
+_log = logging.getLogger(__name__)
 
 
 class _EmailProviderLike(Protocol):
@@ -314,14 +321,45 @@ class AssistantRuntime:
                     )
                 else:
                     agent_result = await self._agent.run(scope, prompt=prompt, deps=deps)
-        except TimeoutError:
+        except TimeoutError as exc:
             await self._recorder.record_failure(
                 run_id,
                 error=f"run timed out after {self._run_timeout_seconds}s",
             )
+            await self._notify_run_failed(
+                run_id=run_id,
+                scope=scope,
+                inbound_email=inbound_email,
+                exception=exc,
+            )
             raise
+        except AgentRunError as wrapped:
+            # Partial usage + steps were captured before the underlying
+            # exception. Persist them so the admin trace + usage_ledger
+            # reflect how far the run got. Then re-raise the ORIGINAL
+            # exception so procrastinate sees the real failure mode.
+            await self._recorder.record_failure(
+                run_id,
+                error=str(wrapped.original),
+                usage=wrapped.usage,
+                steps=wrapped.steps,
+                model_name=scope.model_name,
+            )
+            await self._notify_run_failed(
+                run_id=run_id,
+                scope=scope,
+                inbound_email=inbound_email,
+                exception=wrapped.original,
+            )
+            raise wrapped.original from None
         except Exception as exc:
             await self._recorder.record_failure(run_id, error=str(exc))
+            await self._notify_run_failed(
+                run_id=run_id,
+                scope=scope,
+                inbound_email=inbound_email,
+                exception=exc,
+            )
             raise
 
         attachment_models = await _read_attachments_out(
@@ -468,6 +506,63 @@ class AssistantRuntime:
             assert run is not None
             run.status = "budget_limited"
             await session.commit()
+
+    async def _notify_run_failed(
+        self,
+        *,
+        run_id: str,
+        scope: AssistantScope,
+        inbound_email: NormalizedInboundEmail,
+        exception: BaseException,
+    ) -> None:
+        """Send two best-effort failure notifications: an apologetic, threaded
+        note to the end user and a technical, unthreaded note to the owner.
+
+        Both sends are independently guarded — if the end-user send raises,
+        the owner send is still attempted; if either raises, the exception
+        is logged and swallowed so the original failure surfaces from
+        execute_run unchanged.
+        """
+        assert self._email_provider is not None
+        owner_email = await self._lookup_owner_email(scope.owner_id)
+
+        end_user_envelope = build_end_user_error_envelope(
+            inbound=inbound_email,
+            from_email=scope.inbound_address,
+            run_id=run_id,
+            message_id_factory=self._message_id_factory,
+        )
+        try:
+            await self._email_provider.send_reply(end_user_envelope)
+        except Exception:
+            _log.exception("failed to send end-user error notification for run %s", run_id)
+
+        if owner_email:
+            owner_envelope = build_owner_error_envelope(
+                owner_email=owner_email,
+                from_email=scope.inbound_address,
+                run_id=run_id,
+                exception=exception,
+                admin_base_url=self._admin_base_url,
+                message_id_factory=self._message_id_factory,
+            )
+            try:
+                await self._email_provider.send_reply(owner_envelope)
+            except Exception:
+                _log.exception("failed to send owner error notification for run %s", run_id)
+        else:
+            _log.warning(
+                "owner %s has no email configured; skipping owner failure notification for run %s",
+                scope.owner_id,
+                run_id,
+            )
+
+    async def _lookup_owner_email(self, owner_id: str) -> str | None:
+        async with self._session_factory() as session:
+            owner = await session.get(Owner, owner_id)
+            if owner is None:
+                return None
+            return owner.email or None
 
 
 # --- helpers ---------------------------------------------------------------

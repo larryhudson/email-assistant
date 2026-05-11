@@ -423,13 +423,194 @@ async def test_execute_run_records_failed_run_and_reraises(
     ):
         await runtime.execute_run(run_id)
 
-    assert email_provider.sent == []
+    # End-user notification fires; owner notification is skipped because
+    # the seeded owner row has no email configured (legacy fixture).
+    assert len(email_provider.sent) == 1
+    apology = email_provider.sent[0]
+    assert apology.to_emails == ["mum@example.com"]
+    assert apology.in_reply_to_header == "<m1@x>"
+    assert "exploded" not in apology.body_text
 
     async with sqlite_session_factory() as session:
         run = (await session.execute(select(AgentRun))).scalar_one()
         assert run.status == "failed"
         assert run.error is not None
         assert "exploded" in run.error
+
+
+async def test_execute_run_notifies_end_user_and_owner_on_unhandled_exception(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    import pytest
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+        owner = await session.get(Owner, "o-1")
+        assert owner is not None
+        owner.email = "admin@example.com"
+        await session.commit()
+
+    email_provider = InMemoryEmailProvider()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    memory = InMemoryMemoryAdapter()
+    agent = AssistantAgent()
+    runtime = AssistantRuntime(
+        sqlite_session_factory,
+        attachments_root=tmp_path / "attachments",
+        email_provider=email_provider,
+        workspace_provider=StaticWorkspaceProvider(workspace),
+        memory=memory,
+        agent=agent,
+        projector=EmailWorkspaceProjector(run_inputs_root=tmp_path / "run_inputs"),
+        recorder=RunRecorder(sqlite_session_factory),
+        budget_governor=BudgetGovernor(sqlite_session_factory),
+        envelope_builder=ReplyEnvelopeBuilder(),
+        message_id_factory=lambda: "<run-abc@x>",
+        provider_message_id_factory=lambda: "prov-out-1",
+        admin_base_url="https://admin.example.com",
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    with (
+        agent.override_model(_scope(), _failing_model()),
+        pytest.raises(ValueError, match="exploded"),
+    ):
+        await runtime.execute_run(run_id)
+
+    assert len(email_provider.sent) == 2
+    end_user, owner_msg = email_provider.sent
+
+    # End-user envelope: threaded reply, no exception details, no footer.
+    assert end_user.to_emails == ["mum@example.com"]
+    assert end_user.in_reply_to_header == "<m1@x>"
+    assert end_user.references_headers == ["<m1@x>"]
+    assert end_user.subject == "Re: hello?"
+    assert run_id in end_user.body_text
+    assert "exploded" not in end_user.body_text
+    assert "ValueError" not in end_user.body_text
+    assert "email-agent run footer" not in end_user.body_text
+
+    # Owner envelope: fresh, unthreaded, technical, no footer.
+    assert owner_msg.to_emails == ["admin@example.com"]
+    assert owner_msg.in_reply_to_header is None
+    assert owner_msg.references_headers == []
+    assert owner_msg.subject == f"[email-agent] run {run_id} failed"
+    assert "ValueError" in owner_msg.body_text
+    assert "exploded" in owner_msg.body_text
+    assert run_id in owner_msg.body_text
+    assert f"https://admin.example.com/admin/runs/{run_id}" in owner_msg.body_text
+    assert "email-agent run footer" not in owner_msg.body_text
+
+    # Run remains durably Failed even though notifications fired.
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun))).scalar_one()
+        assert run.status == "failed"
+
+
+async def test_owner_envelope_omits_admin_url_when_unset(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    import pytest
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+        owner = await session.get(Owner, "o-1")
+        assert owner is not None
+        owner.email = "admin@example.com"
+        await session.commit()
+
+    email_provider = InMemoryEmailProvider()
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        workspace_provider=StaticWorkspaceProvider(AssistantWorkspace(InMemoryEnvironment())),
+        memory=InMemoryMemoryAdapter(),
+        agent=AssistantAgent(),
+    )
+    # _build_runtime doesn't set admin_base_url; verify URL is absent.
+
+    agent = runtime._agent
+    assert agent is not None
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    with (
+        agent.override_model(_scope(), _failing_model()),
+        pytest.raises(ValueError, match="exploded"),
+    ):
+        await runtime.execute_run(run_id)
+
+    owner_msg = email_provider.sent[1]
+    assert "Admin:" not in owner_msg.body_text
+    assert "/admin/runs/" not in owner_msg.body_text
+
+
+async def test_notification_send_failures_are_swallowed(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """If sending the end-user note raises, the owner note is still
+    attempted; if both raise, neither escapes — the original failure is
+    what propagates."""
+    import pytest
+
+    from email_agent.models.email import NormalizedOutboundEmail, SentEmail
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+        owner = await session.get(Owner, "o-1")
+        assert owner is not None
+        owner.email = "admin@example.com"
+        await session.commit()
+
+    class ExplodingProvider:
+        def __init__(self) -> None:
+            self.attempts: list[NormalizedOutboundEmail] = []
+
+        async def send_reply(self, reply: NormalizedOutboundEmail) -> SentEmail:
+            self.attempts.append(reply)
+            raise RuntimeError("smtp down")
+
+    provider = ExplodingProvider()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    agent = AssistantAgent()
+    runtime = AssistantRuntime(
+        sqlite_session_factory,
+        attachments_root=tmp_path / "attachments",
+        email_provider=provider,
+        workspace_provider=StaticWorkspaceProvider(workspace),
+        memory=InMemoryMemoryAdapter(),
+        agent=agent,
+        projector=EmailWorkspaceProjector(run_inputs_root=tmp_path / "run_inputs"),
+        recorder=RunRecorder(sqlite_session_factory),
+        budget_governor=BudgetGovernor(sqlite_session_factory),
+        envelope_builder=ReplyEnvelopeBuilder(),
+        message_id_factory=lambda: "<run-abc@x>",
+        provider_message_id_factory=lambda: "prov-out-1",
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    with (
+        agent.override_model(_scope(), _failing_model()),
+        pytest.raises(ValueError, match="exploded"),
+    ):
+        await runtime.execute_run(run_id)
+
+    # Both sends were attempted despite the first raising.
+    assert len(provider.attempts) == 2
+    assert provider.attempts[0].to_emails == ["mum@example.com"]
+    assert provider.attempts[1].to_emails == ["admin@example.com"]
+
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun))).scalar_one()
+        assert run.status == "failed"
 
 
 def _slow_model(sleep_seconds: float = 5.0) -> FunctionModel:
