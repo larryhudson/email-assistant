@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from email_agent.agent.assistant_agent import AssistantAgent
 from email_agent.agent.run_context import RunContextAssembler
+from email_agent.agent.toolset import AgentToolset
 from email_agent.db.models import (
     AgentRun,
     Assistant,
@@ -53,26 +54,12 @@ from email_agent.models.email import (
     SentEmail,
 )
 from email_agent.models.memory import Memory
-from email_agent.models.sandbox import (
-    PendingAttachment,
-    ProjectedFile,
-    ToolCall,
-    ToolResult,
-)
+from email_agent.models.sandbox import PendingAttachment, ProjectedFile
+from email_agent.sandbox.workspace import AssistantWorkspace
 
 
 class _EmailProviderLike(Protocol):
     async def send_reply(self, reply: NormalizedOutboundEmail) -> SentEmail: ...
-
-
-class _SandboxLike(Protocol):
-    async def ensure_started(self, assistant_id: str) -> None: ...
-    async def project_emails(self, assistant_id: str, files: list[ProjectedFile]) -> None: ...
-    async def project_attachments(
-        self, assistant_id: str, run_id: str, files: list[ProjectedFile]
-    ) -> None: ...
-    async def run_tool(self, assistant_id: str, run_id: str, call: ToolCall) -> ToolResult: ...
-    async def read_attachment_out(self, assistant_id: str, run_id: str, path: str) -> bytes: ...
 
 
 class _MemoryLike(Protocol):
@@ -137,7 +124,7 @@ class AssistantRuntime:
         # Below are required for execute_run; left optional so accept_inbound-only
         # callers (the webhook fast path) don't have to construct them.
         email_provider: _EmailProviderLike | None = None,
-        sandbox: _SandboxLike | None = None,
+        workspace: AssistantWorkspace | None = None,
         memory: _MemoryLike | None = None,
         agent: AssistantAgent | None = None,
         projector: EmailWorkspaceProjector | None = None,
@@ -155,7 +142,7 @@ class AssistantRuntime:
         self._router = AssistantRouter(session_factory)
         self._resolver = ThreadResolver(session_factory)
         self._email_provider = email_provider
-        self._sandbox = sandbox
+        self._workspace = workspace
         self._memory = memory
         self._agent = agent
         self._projector = projector
@@ -218,13 +205,13 @@ class AssistantRuntime:
     async def execute_run(self, run_id: str) -> RunOutcome:
         if (
             self._email_provider is None
-            or self._sandbox is None
+            or self._workspace is None
             or self._memory is None
             or self._agent is None
             or self._projector is None
         ):
             raise RuntimeError(
-                "execute_run requires email_provider, sandbox, memory, agent, "
+                "execute_run requires email_provider, workspace, memory, agent, "
                 "and projector to be configured"
             )
 
@@ -245,7 +232,7 @@ class AssistantRuntime:
 
         assert isinstance(decision, Allow)
 
-        # Project the thread to the host inputs dir, then mirror into the sandbox.
+        # Project the thread to the host inputs dir, then mirror into the assistant workspace.
         projection = self._projector.project(
             run_id=run_id,
             thread=thread,
@@ -254,17 +241,7 @@ class AssistantRuntime:
             current_message_id=inbound.id,
         )
         projected_files = _read_projection_files(projection.run_inputs_dir)
-        await self._sandbox.ensure_started(scope.assistant_id)
-        await self._sandbox.project_emails(scope.assistant_id, projected_files)
-
-        deps = AgentDeps(
-            assistant_id=scope.assistant_id,
-            run_id=run_id,
-            thread_id=thread.id,
-            sandbox=self._sandbox,
-            memory=self._memory,
-            pending_attachments=[],
-        )
+        await self._workspace.project_emails(projected_files)
 
         # Pre-call recall once with the inbound body (truncated) as the query.
         # Reliable beats clever — gives the model prior context without it
@@ -281,6 +258,21 @@ class AssistantRuntime:
             memories=memory_context.memories,
         )
         prompt = prompt_context.prompt
+        pending_attachments: list[PendingAttachment] = []
+        deps = AgentDeps(
+            assistant_id=scope.assistant_id,
+            run_id=run_id,
+            thread_id=thread.id,
+            toolset=AgentToolset(
+                assistant_id=scope.assistant_id,
+                run_id=run_id,
+                env=self._workspace.environment,
+                workspace=self._workspace,
+                memory=self._memory,
+                pending_attachments=pending_attachments,
+            ),
+            pending_attachments=pending_attachments,
+        )
 
         # If a model_factory is wired in (production), apply it for the run;
         # otherwise rely on a test having called agent.override_model itself.
@@ -310,9 +302,7 @@ class AssistantRuntime:
             raise
 
         attachment_models = await _read_attachments_out(
-            self._sandbox,
-            scope.assistant_id,
-            run_id,
+            self._workspace,
             deps.pending_attachments,
         )
 
@@ -469,14 +459,12 @@ def _read_projection_files(run_inputs_dir: Path) -> list[ProjectedFile]:
 
 
 async def _read_attachments_out(
-    sandbox: _SandboxLike,
-    assistant_id: str,
-    run_id: str,
+    workspace: AssistantWorkspace,
     pending: list[PendingAttachment],
 ) -> list[EmailAttachment]:
     out: list[EmailAttachment] = []
     for att in pending:
-        data = await sandbox.read_attachment_out(assistant_id, run_id, att.sandbox_path)
+        data = await workspace.read_outbound_attachment(att.sandbox_path)
         out.append(
             EmailAttachment(
                 filename=att.filename,

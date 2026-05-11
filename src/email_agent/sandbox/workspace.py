@@ -18,6 +18,10 @@ class AssistantWorkspace:
     def __init__(self, env: SandboxEnvironment) -> None:
         self._env = env
 
+    @property
+    def environment(self) -> SandboxEnvironment:
+        return self._env
+
     async def project_emails(self, files: list[ProjectedFile]) -> None:
         await self._env.rm(EMAILS_DIR, recursive=True, force=True)
         await self._env.mkdir(EMAILS_DIR, parents=True)
