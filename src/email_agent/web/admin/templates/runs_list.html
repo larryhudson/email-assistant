@@ -36,12 +36,12 @@
   <tbody>
     {% for r in runs %}
     <tr>
-      <td>{{ r.started_at }}</td>
-      <td><code>{{ r.assistant_id }}</code></td>
-      <td><code>{{ r.thread_id }}</code></td>
-      <td><span class="status status-{{ r.status }}">{{ r.status }}</span></td>
-      <td>${{ "%.4f"|format(r.cost) }}</td>
-      <td><a href="/admin/runs/{{ r.id }}">view</a></td>
+      <td data-label="started">{{ r.started_at }}</td>
+      <td data-label="assistant"><code>{{ r.assistant_id }}</code></td>
+      <td data-label="thread"><code>{{ r.thread_id }}</code></td>
+      <td data-label="status"><span class="status status-{{ r.status }}">{{ r.status }}</span></td>
+      <td data-label="cost">${{ "%.4f"|format(r.cost) }}</td>
+      <td data-label=""><a class="row-link" href="/admin/runs/{{ r.id }}">view</a></td>
     </tr>
     {% else %}
     <tr><td colspan="6" class="empty">No runs match.</td></tr>

@@ -2,13 +2,18 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
   <title>{% block title %}email-assistant admin{% endblock %}</title>
   <link rel="stylesheet" href="/admin/static/admin.css">
 </head>
 <body>
 <header class="topbar">
-  <h1>email-assistant admin</h1>
-  <nav>
+  <div class="topbar-row">
+    <h1>email-assistant admin</h1>
+    <button type="button" class="nav-toggle" aria-controls="primary-nav" aria-expanded="false" aria-label="Toggle navigation">menu</button>
+  </div>
+  <nav id="primary-nav">
     <a href="/admin/">assistants</a>
     <a href="/admin/runs">runs</a>
   </nav>
@@ -17,5 +22,16 @@
 <main>
 {% block content %}{% endblock %}
 </main>
+<script>
+(function () {
+  var btn = document.querySelector('.nav-toggle');
+  var nav = document.getElementById('primary-nav');
+  if (!btn || !nav) return;
+  btn.addEventListener('click', function () {
+    var open = nav.classList.toggle('open');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+})();
+</script>
 </body>
 </html>
