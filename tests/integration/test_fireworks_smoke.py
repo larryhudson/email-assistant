@@ -13,10 +13,12 @@ import os
 import pytest
 
 from email_agent.agent.assistant_agent import AssistantAgent
+from email_agent.agent.toolset import AgentToolset
 from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.agent import AgentDeps
 from email_agent.models.assistant import AssistantScope, AssistantStatus
-from email_agent.sandbox.inmemory import InMemorySandbox
+from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
+from email_agent.sandbox.workspace import AssistantWorkspace
 
 pytestmark = [
     pytest.mark.integration,
@@ -57,15 +59,22 @@ async def test_fireworks_returns_non_empty_text() -> None:
     provider = FireworksProvider(api_key=os.environ["FIREWORKS_API_KEY"])
     model = OpenAIChatModel(_FIREWORKS_MODEL_ID, provider=provider)
 
-    sandbox = InMemorySandbox()
-    await sandbox.ensure_started("a-1")
+    env = InMemoryEnvironment()
+    memory = InMemoryMemoryAdapter()
+    pending = []
     deps = AgentDeps(
         assistant_id="a-1",
         run_id="r-1",
         thread_id="t-1",
-        sandbox=sandbox,
-        memory=InMemoryMemoryAdapter(),
-        pending_attachments=[],
+        toolset=AgentToolset(
+            assistant_id="a-1",
+            run_id="r-1",
+            env=env,
+            workspace=AssistantWorkspace(env),
+            memory=memory,
+            pending_attachments=pending,
+        ),
+        pending_attachments=pending,
     )
 
     agent = AssistantAgent()

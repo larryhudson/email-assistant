@@ -3,15 +3,21 @@ from decimal import Decimal
 from typing import Protocol
 
 from email_agent.models.memory import Memory
-from email_agent.models.sandbox import PendingAttachment, ToolCall, ToolResult
+from email_agent.models.sandbox import PendingAttachment
 
 
-class _SandboxLike(Protocol):
-    async def run_tool(self, assistant_id: str, run_id: str, call: ToolCall) -> ToolResult: ...
+class _ToolsetLike(Protocol):
+    async def read(self, path: str) -> str: ...
 
+    async def write(self, path: str, content: str) -> str: ...
 
-class _MemoryLike(Protocol):
-    async def search(self, assistant_id: str, query: str) -> list[Memory]: ...
+    async def edit(self, path: str, old: str, new: str) -> str: ...
+
+    async def bash(self, command: str, *, timeout_s: int | None = None) -> str: ...
+
+    async def attach_file(self, path: str, filename: str | None = None) -> str: ...
+
+    async def memory_search(self, query: str) -> list[Memory]: ...
 
 
 @dataclass
@@ -26,8 +32,7 @@ class AgentDeps:
     assistant_id: str
     run_id: str
     thread_id: str
-    sandbox: _SandboxLike
-    memory: _MemoryLike
+    toolset: _ToolsetLike
     pending_attachments: list[PendingAttachment] = field(default_factory=list)
 
 

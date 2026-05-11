@@ -18,14 +18,14 @@ from email_agent.domain.workspace_projector import EmailWorkspaceProjector
 from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.assistant import AssistantScope
 from email_agent.runtime.assistant_runtime import AssistantRuntime
-from email_agent.sandbox.inmemory import InMemorySandbox
+from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
+from email_agent.sandbox.workspace import AssistantWorkspace
 
 if TYPE_CHECKING:
     from pydantic_ai.models import Model
 
     from email_agent.mail.port import EmailProvider
     from email_agent.memory.port import MemoryPort
-    from email_agent.sandbox.port import AssistantSandbox
 
 
 def make_fireworks_model_factory(
@@ -93,33 +93,12 @@ def make_cognee_memory(settings: Settings) -> "MemoryPort":
     return CogneeMemoryAdapter()
 
 
-def make_docker_sandbox(settings: Settings) -> "AssistantSandbox":
-    """Build a DockerSandbox from Settings.
-
-    Caller is responsible for ensuring the docker daemon is reachable and
-    the base image (`settings.sandbox_image`) is built — see
-    `docker/sandbox/Dockerfile` for the build recipe.
-    """
-    import docker as docker_sdk
-    from email_agent.sandbox.docker import DockerSandbox
-
-    client = docker_sdk.from_env()
-    return DockerSandbox(
-        client=client,
-        image=settings.sandbox_image,
-        sandbox_data_root=settings.sandbox_data_root,
-        memory_mb=settings.sandbox_memory_mb,
-        cpu_cores=settings.sandbox_cpu_cores,
-        bash_timeout_seconds=settings.sandbox_bash_timeout_seconds,
-    )
-
-
 def make_runtime_from_settings(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
     *,
     email_provider: "EmailProvider",
-    sandbox: "AssistantSandbox | None" = None,
+    workspace: AssistantWorkspace | None = None,
     memory: "MemoryPort | None" = None,
     use_real_model: bool = True,
     use_real_memory: bool = True,
@@ -129,9 +108,9 @@ def make_runtime_from_settings(
 ) -> AssistantRuntime:
     """Compose a fully-wired AssistantRuntime for production-ish use.
 
-    `sandbox` defaults to a `DockerSandbox` (`use_docker_sandbox=True`),
-    falling back to `InMemorySandbox` when the toggle is off — useful for
-    quick iteration without docker. `memory` defaults to a
+    `workspace` defaults to an in-memory workspace when
+    `use_docker_sandbox=False`. Docker workspace wiring lands with the
+    `DockerEnvironmentAdapter` refactor. `memory` defaults to a
     `CogneeMemoryAdapter` (`use_real_memory=True`), falling back to
     `InMemoryMemoryAdapter` when the toggle is off — useful for offline
     iteration without an embedding API key. `use_real_model=False` skips
@@ -139,8 +118,13 @@ def make_runtime_from_settings(
     `use_real_model=True` (default) plumbs through
     `make_fireworks_model_factory(settings)`.
     """
-    if sandbox is None:
-        sandbox = make_docker_sandbox(settings) if use_docker_sandbox else InMemorySandbox()
+    if workspace is None:
+        if use_docker_sandbox:
+            raise RuntimeError(
+                "Docker workspace wiring now goes through DockerEnvironmentAdapter; "
+                "set use_docker_sandbox=False until that adapter is wired."
+            )
+        workspace = AssistantWorkspace(InMemoryEnvironment())
     if memory is None:
         memory = make_cognee_memory(settings) if use_real_memory else InMemoryMemoryAdapter()
     projector = EmailWorkspaceProjector(run_inputs_root=settings.run_inputs_root)
@@ -168,7 +152,7 @@ def make_runtime_from_settings(
         session_factory,
         attachments_root=settings.attachments_root,
         email_provider=email_provider,
-        sandbox=sandbox,
+        workspace=workspace,
         memory=memory,
         agent=AssistantAgent(),
         projector=projector,
@@ -227,7 +211,6 @@ async def inject_session(
 __all__ = [
     "inject_session",
     "make_cognee_memory",
-    "make_docker_sandbox",
     "make_fireworks_model_factory",
     "make_runtime_from_settings",
 ]

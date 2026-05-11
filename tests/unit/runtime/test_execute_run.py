@@ -33,7 +33,8 @@ from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.assistant import AssistantScope, AssistantStatus
 from email_agent.models.email import NormalizedInboundEmail
 from email_agent.runtime.assistant_runtime import AssistantRuntime, Completed
-from email_agent.sandbox.inmemory import InMemorySandbox
+from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
+from email_agent.sandbox.workspace import AssistantWorkspace
 
 
 async def _seed_assistant(session: AsyncSession) -> None:
@@ -135,7 +136,7 @@ def _build_runtime(
     *,
     tmp_path: Path,
     email_provider: InMemoryEmailProvider,
-    sandbox: InMemorySandbox,
+    workspace: AssistantWorkspace,
     memory: InMemoryMemoryAdapter,
     agent: AssistantAgent,
 ) -> AssistantRuntime:
@@ -143,7 +144,7 @@ def _build_runtime(
         session_factory,
         attachments_root=tmp_path / "attachments",
         email_provider=email_provider,
-        sandbox=sandbox,
+        workspace=workspace,
         memory=memory,
         agent=agent,
         projector=EmailWorkspaceProjector(run_inputs_root=tmp_path / "run_inputs"),
@@ -171,14 +172,14 @@ async def test_execute_run_sends_reply_and_records_completion(
         await _seed_assistant(session)
 
     email_provider = InMemoryEmailProvider()
-    sandbox = InMemorySandbox()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
     memory = InMemoryMemoryAdapter()
     agent = AssistantAgent()
     runtime = _build_runtime(
         sqlite_session_factory,
         tmp_path=tmp_path,
         email_provider=email_provider,
-        sandbox=sandbox,
+        workspace=workspace,
         memory=memory,
         agent=agent,
     )
@@ -261,7 +262,7 @@ async def test_execute_run_injects_recalled_memory_into_prompt(
             pass
 
     email_provider = InMemoryEmailProvider()
-    sandbox = InMemorySandbox()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
     memory = RecordingMemory()
     agent = AssistantAgent()
 
@@ -281,7 +282,7 @@ async def test_execute_run_injects_recalled_memory_into_prompt(
         sqlite_session_factory,
         tmp_path=tmp_path,
         email_provider=email_provider,
-        sandbox=sandbox,
+        workspace=workspace,
         memory=memory,  # ty: ignore[invalid-argument-type]
         agent=agent,
     )
@@ -345,14 +346,15 @@ async def test_execute_run_sends_template_when_budget_exceeded(
         await session.commit()
 
     email_provider = InMemoryEmailProvider()
-    sandbox = InMemorySandbox()
+    env = InMemoryEnvironment()
+    workspace = AssistantWorkspace(env)
     memory = InMemoryMemoryAdapter()
     agent = AssistantAgent()
     runtime = _build_runtime(
         sqlite_session_factory,
         tmp_path=tmp_path,
         email_provider=email_provider,
-        sandbox=sandbox,
+        workspace=workspace,
         memory=memory,
         agent=agent,
     )
@@ -371,8 +373,8 @@ async def test_execute_run_sends_template_when_budget_exceeded(
     body = email_provider.sent[0].body_text
     assert "monthly budget" in body.lower()
 
-    # Sandbox was never touched.
-    assert sandbox._started == set() or "a-1" not in getattr(sandbox, "_started", set())
+    # Workspace was never touched.
+    assert not await env.exists("/workspace/emails")
 
     # Run marked budget_limited, not completed.
     async with sqlite_session_factory() as session:
@@ -399,14 +401,14 @@ async def test_execute_run_records_failed_run_and_reraises(
         await _seed_assistant(session)
 
     email_provider = InMemoryEmailProvider()
-    sandbox = InMemorySandbox()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
     memory = InMemoryMemoryAdapter()
     agent = AssistantAgent()
     runtime = _build_runtime(
         sqlite_session_factory,
         tmp_path=tmp_path,
         email_provider=email_provider,
-        sandbox=sandbox,
+        workspace=workspace,
         memory=memory,
         agent=agent,
     )
@@ -452,14 +454,14 @@ async def test_execute_run_enforces_run_timeout(
         await _seed_assistant(session)
 
     email_provider = InMemoryEmailProvider()
-    sandbox = InMemorySandbox()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
     memory = InMemoryMemoryAdapter()
     agent = AssistantAgent()
     runtime = AssistantRuntime(
         sqlite_session_factory,
         attachments_root=tmp_path / "attachments",
         email_provider=email_provider,
-        sandbox=sandbox,
+        workspace=workspace,
         memory=memory,
         agent=agent,
         projector=EmailWorkspaceProjector(run_inputs_root=tmp_path / "run_inputs"),

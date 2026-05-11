@@ -15,7 +15,6 @@ from email_agent.agent.pricing import estimate_cost_usd
 from email_agent.models.agent import AgentDeps, AgentResult, RunStepRecord, RunUsage
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.memory import Memory
-from email_agent.models.sandbox import BashResult, PendingAttachment, ToolCall, ToolResult
 
 
 class AssistantAgent:
@@ -54,39 +53,17 @@ class AssistantAgent:
         @agent.tool
         async def read(ctx: RunContext[AgentDeps], path: str) -> str:
             """Read a file inside /workspace and return its text contents."""
-            result = await ctx.deps.sandbox.run_tool(
-                ctx.deps.assistant_id,
-                ctx.deps.run_id,
-                ToolCall(kind="read", path=path),
-            )
-            if not result.ok:
-                return _tool_error("read", result, detail=path)
-            assert isinstance(result.output, str)
-            return result.output
+            return await ctx.deps.toolset.read(path)
 
         @agent.tool
         async def write(ctx: RunContext[AgentDeps], path: str, content: str) -> str:
             """Write a file inside /workspace. Refuses paths under /workspace/emails/."""
-            result = await ctx.deps.sandbox.run_tool(
-                ctx.deps.assistant_id,
-                ctx.deps.run_id,
-                ToolCall(kind="write", path=path, content=content),
-            )
-            if not result.ok:
-                return _tool_error("write", result, detail=path)
-            return f"wrote {path}"
+            return await ctx.deps.toolset.write(path, content)
 
         @agent.tool
         async def edit(ctx: RunContext[AgentDeps], path: str, old: str, new: str) -> str:
             """Replace the first occurrence of `old` with `new` in `path`."""
-            result = await ctx.deps.sandbox.run_tool(
-                ctx.deps.assistant_id,
-                ctx.deps.run_id,
-                ToolCall(kind="edit", path=path, old=old, new=new),
-            )
-            if not result.ok:
-                return _tool_error("edit", result, detail=path)
-            return f"edited {path}"
+            return await ctx.deps.toolset.edit(path, old, new)
 
         @agent.tool
         async def attach_file(
@@ -98,43 +75,17 @@ class AssistantAgent:
             bytes back out after the run completes and stitches them into the
             outbound envelope. `filename` defaults to the basename of `path`.
             """
-            check = await ctx.deps.sandbox.run_tool(
-                ctx.deps.assistant_id,
-                ctx.deps.run_id,
-                ToolCall(kind="attach_file", path=path),
-            )
-            if not check.ok:
-                return _tool_error("attach_file", check, detail=path)
-            ctx.deps.pending_attachments.append(
-                PendingAttachment(
-                    sandbox_path=path,
-                    filename=filename or path.rsplit("/", 1)[-1],
-                )
-            )
-            return f"attached {path}"
+            return await ctx.deps.toolset.attach_file(path, filename)
 
         @agent.tool
         async def memory_search(ctx: RunContext[AgentDeps], query: str) -> list[Memory]:
             """Search durable memory for the assistant; bypasses the sandbox."""
-            return await ctx.deps.memory.search(ctx.deps.assistant_id, query)
+            return await ctx.deps.toolset.memory_search(query)
 
         @agent.tool
         async def bash(ctx: RunContext[AgentDeps], command: str) -> str:
             """Run a bash command in the sandbox; returns combined stdout/stderr."""
-            result = await ctx.deps.sandbox.run_tool(
-                ctx.deps.assistant_id,
-                ctx.deps.run_id,
-                ToolCall(kind="bash", command=command),
-            )
-            if isinstance(result.output, BashResult):
-                return (
-                    f"exit_code={result.output.exit_code}\n"
-                    f"stdout:\n{result.output.stdout}\n"
-                    f"stderr:\n{result.output.stderr}"
-                )
-            if not result.ok:
-                return _tool_error("bash", result, detail=command)
-            return ""
+            return await ctx.deps.toolset.bash(command)
 
         return agent
 
@@ -225,11 +176,6 @@ def _stringify(value: object) -> str:
         except TypeError:
             return repr(value)
     return repr(value)
-
-
-def _tool_error(tool_name: str, result: ToolResult, *, detail: str | None = None) -> str:
-    subject = f"{tool_name}({detail})" if detail else tool_name
-    return f"ERROR: {subject} failed\n{result.error or 'unknown error'}"
 
 
 def _truncate(s: str, limit: int = 500) -> str:

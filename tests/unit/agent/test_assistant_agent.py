@@ -9,11 +9,13 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
 from email_agent.agent.assistant_agent import AssistantAgent
+from email_agent.agent.toolset import AgentToolset
 from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.agent import AgentDeps
 from email_agent.models.assistant import AssistantScope, AssistantStatus
-from email_agent.models.sandbox import ProjectedFile
-from email_agent.sandbox.inmemory import InMemorySandbox
+from email_agent.models.sandbox import PendingAttachment
+from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
+from email_agent.sandbox.workspace import AssistantWorkspace
 
 
 def _scope() -> AssistantScope:
@@ -32,20 +34,34 @@ def _scope() -> AssistantScope:
     )
 
 
-async def test_assistant_agent_returns_text_output() -> None:
-    sandbox = InMemorySandbox()
-    memory = InMemoryMemoryAdapter()
-    await sandbox.ensure_started("a-1")
-
-    agent = AssistantAgent()
-    deps = AgentDeps(
+def _deps(
+    *,
+    env: InMemoryEnvironment | None = None,
+    memory: InMemoryMemoryAdapter | None = None,
+    pending: list[PendingAttachment] | None = None,
+) -> AgentDeps:
+    actual_env = env or InMemoryEnvironment()
+    actual_memory = memory or InMemoryMemoryAdapter()
+    actual_pending = pending if pending is not None else []
+    return AgentDeps(
         assistant_id="a-1",
         run_id="r-1",
         thread_id="t-1",
-        sandbox=sandbox,
-        memory=memory,
-        pending_attachments=[],
+        toolset=AgentToolset(
+            assistant_id="a-1",
+            run_id="r-1",
+            env=actual_env,
+            workspace=AssistantWorkspace(actual_env),
+            memory=actual_memory,
+            pending_attachments=actual_pending,
+        ),
+        pending_attachments=actual_pending,
     )
+
+
+async def test_assistant_agent_returns_text_output() -> None:
+    agent = AssistantAgent()
+    deps = _deps()
 
     with agent.override_model(_scope(), TestModel(call_tools=[], custom_output_text="hello back")):
         result = await agent.run(_scope(), prompt="hi", deps=deps)
@@ -71,23 +87,13 @@ def _call_then_echo(tool_name: str, args: dict) -> FunctionModel:
     return FunctionModel(fn)
 
 
-async def test_read_tool_routes_through_sandbox() -> None:
-    sandbox = InMemorySandbox()
-    memory = InMemoryMemoryAdapter()
-    await sandbox.ensure_started("a-1")
-    await sandbox.project_emails(
-        "a-1", [ProjectedFile(path="emails/t-1/thread.md", content=b"# greetings")]
-    )
+async def test_read_tool_routes_through_toolset() -> None:
+    env = InMemoryEnvironment()
+    await AssistantWorkspace(env).project_emails([])
+    await env.write_text("emails/t-1/thread.md", "# greetings")
 
     agent = AssistantAgent()
-    deps = AgentDeps(
-        assistant_id="a-1",
-        run_id="r-1",
-        thread_id="t-1",
-        sandbox=sandbox,
-        memory=memory,
-        pending_attachments=[],
-    )
+    deps = _deps(env=env)
 
     with agent.override_model(
         _scope(),
@@ -99,19 +105,8 @@ async def test_read_tool_routes_through_sandbox() -> None:
 
 
 async def test_read_tool_returns_error_text_instead_of_raising() -> None:
-    sandbox = InMemorySandbox()
-    memory = InMemoryMemoryAdapter()
-    await sandbox.ensure_started("a-1")
-
     agent = AssistantAgent()
-    deps = AgentDeps(
-        assistant_id="a-1",
-        run_id="r-1",
-        thread_id="t-1",
-        sandbox=sandbox,
-        memory=memory,
-        pending_attachments=[],
-    )
+    deps = _deps()
 
     with agent.override_model(
         _scope(),
@@ -123,20 +118,11 @@ async def test_read_tool_returns_error_text_instead_of_raising() -> None:
     assert "not found" in result.body
 
 
-async def test_write_tool_routes_through_sandbox() -> None:
-    sandbox = InMemorySandbox()
-    memory = InMemoryMemoryAdapter()
-    await sandbox.ensure_started("a-1")
+async def test_write_tool_routes_through_toolset() -> None:
+    env = InMemoryEnvironment()
 
     agent = AssistantAgent()
-    deps = AgentDeps(
-        assistant_id="a-1",
-        run_id="r-1",
-        thread_id="t-1",
-        sandbox=sandbox,
-        memory=memory,
-        pending_attachments=[],
-    )
+    deps = _deps(env=env)
 
     with agent.override_model(
         _scope(),
@@ -144,31 +130,15 @@ async def test_write_tool_routes_through_sandbox() -> None:
     ):
         await agent.run(_scope(), prompt="please write", deps=deps)
 
-    from email_agent.models.sandbox import ToolCall
-
-    read_result = await sandbox.run_tool("a-1", "r-1", ToolCall(kind="read", path="notes/draft.md"))
-    assert read_result.output == "hi\n"
+    assert await env.read_text("notes/draft.md") == "hi\n"
 
 
-async def test_edit_tool_routes_through_sandbox() -> None:
-    sandbox = InMemorySandbox()
-    memory = InMemoryMemoryAdapter()
-    await sandbox.ensure_started("a-1")
-    from email_agent.models.sandbox import ToolCall
-
-    await sandbox.run_tool(
-        "a-1", "r-1", ToolCall(kind="write", path="notes/plan.md", content="hello world\n")
-    )
+async def test_edit_tool_routes_through_toolset() -> None:
+    env = InMemoryEnvironment()
+    await env.write_text("notes/plan.md", "hello world\n")
 
     agent = AssistantAgent()
-    deps = AgentDeps(
-        assistant_id="a-1",
-        run_id="r-1",
-        thread_id="t-1",
-        sandbox=sandbox,
-        memory=memory,
-        pending_attachments=[],
-    )
+    deps = _deps(env=env)
 
     with agent.override_model(
         _scope(),
@@ -176,24 +146,12 @@ async def test_edit_tool_routes_through_sandbox() -> None:
     ):
         await agent.run(_scope(), prompt="please edit", deps=deps)
 
-    read_result = await sandbox.run_tool("a-1", "r-1", ToolCall(kind="read", path="notes/plan.md"))
-    assert read_result.output == "hello planet\n"
+    assert await env.read_text("notes/plan.md") == "hello planet\n"
 
 
-async def test_bash_tool_routes_through_sandbox() -> None:
-    sandbox = InMemorySandbox()
-    memory = InMemoryMemoryAdapter()
-    await sandbox.ensure_started("a-1")
-
+async def test_bash_tool_routes_through_toolset() -> None:
     agent = AssistantAgent()
-    deps = AgentDeps(
-        assistant_id="a-1",
-        run_id="r-1",
-        thread_id="t-1",
-        sandbox=sandbox,
-        memory=memory,
-        pending_attachments=[],
-    )
+    deps = _deps()
 
     with agent.override_model(
         _scope(),
@@ -205,22 +163,13 @@ async def test_bash_tool_routes_through_sandbox() -> None:
 
 
 async def test_memory_search_bypasses_sandbox() -> None:
-    sandbox = InMemorySandbox()
     memory = InMemoryMemoryAdapter()
-    await sandbox.ensure_started("a-1")
     await memory.record_turn("a-1", "t-1", "user", "project alpha kicks off Monday")
     await memory.record_turn("a-1", "t-1", "user", "project alpha needs a budget")
     await memory.record_turn("a-1", "t-1", "user", "different topic")
 
     agent = AssistantAgent()
-    deps = AgentDeps(
-        assistant_id="a-1",
-        run_id="r-1",
-        thread_id="t-1",
-        sandbox=sandbox,
-        memory=memory,
-        pending_attachments=[],
-    )
+    deps = _deps(memory=memory)
 
     with agent.override_model(
         _scope(),
@@ -235,26 +184,12 @@ async def test_memory_search_bypasses_sandbox() -> None:
 
 
 async def test_attach_file_appends_pending_attachment() -> None:
-    sandbox = InMemorySandbox()
-    memory = InMemoryMemoryAdapter()
-    await sandbox.ensure_started("a-1")
-    from email_agent.models.sandbox import ToolCall as _ToolCall
-
-    await sandbox.run_tool(
-        "a-1",
-        "r-1",
-        _ToolCall(kind="write", path="report.pdf", content="%PDF-1.7"),
-    )
+    env = InMemoryEnvironment()
+    await env.write_text("report.pdf", "%PDF-1.7")
+    pending: list[PendingAttachment] = []
 
     agent = AssistantAgent()
-    deps = AgentDeps(
-        assistant_id="a-1",
-        run_id="r-1",
-        thread_id="t-1",
-        sandbox=sandbox,
-        memory=memory,
-        pending_attachments=[],
-    )
+    deps = _deps(env=env, pending=pending)
 
     with agent.override_model(
         _scope(),
@@ -262,34 +197,16 @@ async def test_attach_file_appends_pending_attachment() -> None:
     ):
         await agent.run(_scope(), prompt="please attach", deps=deps)
 
-    from email_agent.models.sandbox import PendingAttachment
-
-    assert deps.pending_attachments == [
-        PendingAttachment(sandbox_path="report.pdf", filename="renamed.pdf")
-    ]
+    assert pending == [PendingAttachment(sandbox_path="report.pdf", filename="renamed.pdf")]
 
 
 async def test_attach_file_defaults_filename_to_basename() -> None:
-    sandbox = InMemorySandbox()
-    memory = InMemoryMemoryAdapter()
-    await sandbox.ensure_started("a-1")
-    from email_agent.models.sandbox import ToolCall as _ToolCall
-
-    await sandbox.run_tool(
-        "a-1",
-        "r-1",
-        _ToolCall(kind="write", path="docs/report.pdf", content="%PDF-1.7"),
-    )
+    env = InMemoryEnvironment()
+    await env.write_text("docs/report.pdf", "%PDF-1.7")
+    pending: list[PendingAttachment] = []
 
     agent = AssistantAgent()
-    deps = AgentDeps(
-        assistant_id="a-1",
-        run_id="r-1",
-        thread_id="t-1",
-        sandbox=sandbox,
-        memory=memory,
-        pending_attachments=[],
-    )
+    deps = _deps(env=env, pending=pending)
 
     with agent.override_model(
         _scope(),
@@ -297,27 +214,12 @@ async def test_attach_file_defaults_filename_to_basename() -> None:
     ):
         await agent.run(_scope(), prompt="please attach", deps=deps)
 
-    from email_agent.models.sandbox import PendingAttachment
-
-    assert deps.pending_attachments == [
-        PendingAttachment(sandbox_path="docs/report.pdf", filename="report.pdf")
-    ]
+    assert pending == [PendingAttachment(sandbox_path="docs/report.pdf", filename="report.pdf")]
 
 
 async def test_attach_file_returns_error_text_instead_of_raising() -> None:
-    sandbox = InMemorySandbox()
-    memory = InMemoryMemoryAdapter()
-    await sandbox.ensure_started("a-1")
-
     agent = AssistantAgent()
-    deps = AgentDeps(
-        assistant_id="a-1",
-        run_id="r-1",
-        thread_id="t-1",
-        sandbox=sandbox,
-        memory=memory,
-        pending_attachments=[],
-    )
+    deps = _deps()
 
     with agent.override_model(
         _scope(),
