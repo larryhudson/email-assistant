@@ -32,8 +32,7 @@ class RunContextAssembler:
             f"modify anything under emails/ (that directory is the read-only thread history). "
             f"Use `write`/`edit`/`bash` only if you need scratch files under other paths. "
             f"Use `memory_search` to look up prior context. Use `attach_file` only if you "
-            f"genuinely need to attach a generated artefact."
-            + memory_block
+            f"genuinely need to attach a generated artefact." + memory_block
         )
 
         return AgentPromptContext(
