@@ -1,3 +1,4 @@
+from email_agent.sandbox.docker_environment import DockerEnvironmentAdapter, DockerWorkspaceProvider
 from email_agent.sandbox.environment import FileStat, SandboxEnvironment, ShellResult
 from email_agent.sandbox.inmemory import InMemorySandbox
 from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
@@ -12,6 +13,8 @@ from email_agent.sandbox.workspace_provider import (
 __all__ = [
     "AssistantSandbox",
     "AssistantWorkspace",
+    "DockerEnvironmentAdapter",
+    "DockerWorkspaceProvider",
     "FileStat",
     "InMemoryEnvironment",
     "InMemorySandbox",

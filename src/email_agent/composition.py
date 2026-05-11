@@ -119,11 +119,19 @@ def make_runtime_from_settings(
     """
     if workspace_provider is None:
         if use_docker_sandbox:
-            raise RuntimeError(
-                "Docker workspace wiring now goes through DockerEnvironmentAdapter; "
-                "set use_docker_sandbox=False until that adapter is wired."
+            import docker as docker_sdk
+            from email_agent.sandbox.docker_environment import DockerWorkspaceProvider
+
+            workspace_provider = DockerWorkspaceProvider(
+                client=docker_sdk.from_env(),
+                image=settings.sandbox_image,
+                sandbox_data_root=settings.sandbox_data_root,
+                memory_mb=settings.sandbox_memory_mb,
+                cpu_cores=settings.sandbox_cpu_cores,
+                bash_timeout_seconds=settings.sandbox_bash_timeout_seconds,
             )
-        workspace_provider = InMemoryWorkspaceProvider()
+        else:
+            workspace_provider = InMemoryWorkspaceProvider()
     if memory is None:
         memory = make_cognee_memory(settings) if use_real_memory else InMemoryMemoryAdapter()
     projector = EmailWorkspaceProjector(run_inputs_root=settings.run_inputs_root)
