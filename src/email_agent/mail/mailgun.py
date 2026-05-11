@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import httpx
 
+from email_agent.domain.run_footer import strip_footer
 from email_agent.models.email import (
     EmailAttachment,
     NormalizedInboundEmail,
@@ -76,7 +77,7 @@ class MailgunEmailProvider:
             recipient = form["recipient"]
             sender = form["sender"]
             subject = form["subject"]
-            body_text = form["body-plain"]
+            body_text = strip_footer(form["body-plain"])
             message_id_header = form["Message-Id"]
             timestamp = form["timestamp"]
         except KeyError as exc:

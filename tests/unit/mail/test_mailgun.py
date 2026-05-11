@@ -157,3 +157,45 @@ async def test_parse_inbound_includes_inline_attachments():
     assert att.content_type == "application/pdf"
     assert att.size_bytes == 4
     assert att.data == b"%PDF"
+
+
+async def test_parse_inbound_strips_footer_marker_from_body_text():
+    from email_agent.domain.run_footer import FOOTER_MARKER
+
+    body_with_footer = (
+        "Thanks for the update!\n"
+        "\n"
+        f"{FOOTER_MARKER}\n"
+        "Run: r-abcd1234\n"
+        "Tokens: in=100 out=50\n"
+        "Cost: $0.0012\n"
+    )
+    provider = MailgunEmailProvider(signing_key=SIGNING_KEY)
+    email = await provider.parse_inbound(
+        WebhookRequest(headers={}, body=b"", form=_form(**{"body-plain": body_with_footer})),
+    )
+
+    assert email.body_text == "Thanks for the update!\n\n"
+    assert FOOTER_MARKER not in email.body_text
+
+
+async def test_parse_inbound_strips_quoted_footer_marker():
+    from email_agent.domain.run_footer import FOOTER_MARKER
+
+    body_with_quoted_footer = f"Reply text here.\n\n> {FOOTER_MARKER}\n> Run: r-old\n"
+    provider = MailgunEmailProvider(signing_key=SIGNING_KEY)
+    email = await provider.parse_inbound(
+        WebhookRequest(headers={}, body=b"", form=_form(**{"body-plain": body_with_quoted_footer})),
+    )
+
+    assert email.body_text == "Reply text here.\n\n"
+
+
+async def test_parse_inbound_preserves_body_when_no_footer_marker():
+    body = "Just a regular reply with no agent footer.\n"
+    provider = MailgunEmailProvider(signing_key=SIGNING_KEY)
+    email = await provider.parse_inbound(
+        WebhookRequest(headers={}, body=b"", form=_form(**{"body-plain": body})),
+    )
+
+    assert email.body_text == body

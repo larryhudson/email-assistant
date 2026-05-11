@@ -35,7 +35,7 @@ from email_agent.domain.budget_governor import (
 )
 from email_agent.domain.budget_reply import build_budget_limit_reply
 from email_agent.domain.inbound_persister import persist_inbound
-from email_agent.domain.reply_envelope import ReplyEnvelopeBuilder
+from email_agent.domain.reply_envelope import ReplyEnvelopeBuilder, RunFooterContext
 from email_agent.domain.router import (
     AssistantRouter,
     Routed,
@@ -140,6 +140,7 @@ class AssistantRuntime:
         model_factory: "Callable[[AssistantScope], Model] | None" = None,
         run_agent_defer: Callable[..., Awaitable[None]] | None = None,
         scheduled_tasks: ScheduledTaskService | None = None,
+        admin_base_url: str | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._attachments_root = attachments_root
@@ -162,6 +163,7 @@ class AssistantRuntime:
         self._run_agent_defer = run_agent_defer
         self._scheduled_tasks = scheduled_tasks or ScheduledTaskService(session_factory)
         self._context_assembler = RunContextAssembler()
+        self._admin_base_url = admin_base_url
 
     @property
     def scheduled_tasks(self) -> ScheduledTaskService:
@@ -328,6 +330,11 @@ class AssistantRuntime:
             body_text=agent_result.body,
             attachments=attachment_models,
             message_id_factory=self._message_id_factory,
+            run_footer=RunFooterContext(
+                usage=agent_result.usage,
+                run_id=run_id,
+                admin_base_url=self._admin_base_url,
+            ),
         )
 
         sent = await self._email_provider.send_reply(envelope)
