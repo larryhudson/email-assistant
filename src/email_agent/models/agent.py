@@ -34,6 +34,8 @@ class AgentDeps:
     thread_id: str
     toolset: _ToolsetLike
     pending_attachments: list[PendingAttachment] = field(default_factory=list)
+    skills_block: str = ""
+    context_block: str = ""
 
 
 @dataclass(frozen=True)
