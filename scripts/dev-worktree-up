@@ -51,7 +51,7 @@ echo "→ writing .env (DATABASE_URL → $DB)"
 sed -e "s|/email_agent$|/$DB|" "$ROOT/.env" > "$WORKTREE/.env"
 
 echo "→ rewriting Procfile.dev port → $PORT"
-sed -i "s/--port 18788/--port $PORT/" "$WORKTREE/Procfile.dev"
+sed -i -E "s/--port [0-9]+/--port $PORT/" "$WORKTREE/Procfile.dev"
 
 echo "→ uv sync"
 (cd "$WORKTREE" && uv sync --quiet)
