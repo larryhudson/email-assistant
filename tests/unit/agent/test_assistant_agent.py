@@ -41,6 +41,7 @@ def _deps(
     pending: list[PendingAttachment] | None = None,
     skills_block: str = "",
     context_block: str = "",
+    scheduled_tasks: object | None = None,
 ) -> AgentDeps:
     actual_env = env or InMemoryEnvironment()
     actual_memory = memory or InMemoryMemoryAdapter()
@@ -56,6 +57,7 @@ def _deps(
             workspace=AssistantWorkspace(actual_env),
             memory=actual_memory,
             pending_attachments=actual_pending,
+            scheduled_tasks=scheduled_tasks,  # ty: ignore[invalid-argument-type]
         ),
         pending_attachments=actual_pending,
         skills_block=skills_block,
@@ -294,6 +296,129 @@ async def test_scope_system_prompt_still_present() -> None:
 
     assert captured["instructions"] is not None
     assert "be kind" in captured["instructions"]
+
+
+class _FakeScheduledTasks:
+    """Tiny in-memory stand-in for ScheduledTaskService used by agent-tool tests."""
+
+    def __init__(self) -> None:
+        from email_agent.models.scheduled import ScheduledTask
+
+        self.created: list[dict] = []
+        self.deleted: list[str] = []
+        self._items: list[ScheduledTask] = []
+
+    async def create_once(self, *, assistant_id, run_at, name, body, created_by_run_id=None):
+        from email_agent.models.scheduled import (
+            ScheduledTask,
+            ScheduledTaskKind,
+            ScheduledTaskStatus,
+        )
+
+        self.created.append(
+            {"assistant_id": assistant_id, "run_at": run_at, "name": name, "body": body}
+        )
+        task = ScheduledTask(
+            id="st-1",
+            assistant_id=assistant_id,
+            kind=ScheduledTaskKind.ONCE,
+            run_at=run_at,
+            cron_expr=None,
+            next_run_at=run_at,
+            last_run_at=None,
+            status=ScheduledTaskStatus.ACTIVE,
+            name=name,
+            body=body,
+            created_by_run_id=created_by_run_id,
+            created_at=run_at,
+            updated_at=run_at,
+        )
+        self._items.append(task)
+        return task
+
+    async def create_cron(
+        self, *, assistant_id, cron_expr, name, body, created_by_run_id=None
+    ):  # pragma: no cover - not exercised here
+        raise NotImplementedError
+
+    async def list_for_assistant(self, assistant_id):
+        return [t for t in self._items if t.assistant_id == assistant_id]
+
+    async def delete(self, *, assistant_id, task_id):
+        before = len(self._items)
+        self._items = [
+            t for t in self._items if not (t.id == task_id and t.assistant_id == assistant_id)
+        ]
+        if len(self._items) < before:
+            self.deleted.append(task_id)
+            return True
+        return False
+
+
+async def test_create_scheduled_task_tool_routes_through_toolset() -> None:
+    fake = _FakeScheduledTasks()
+    agent = AssistantAgent()
+    deps = _deps(scheduled_tasks=fake)
+
+    with agent.override_model(
+        _scope(),
+        _call_then_echo(
+            "create_scheduled_task",
+            {
+                "kind": "once",
+                "when": "2026-05-12T09:00:00+00:00",
+                "name": "ping",
+                "body": "ping body",
+            },
+        ),
+    ):
+        result = await agent.run(_scope(), prompt="schedule it", deps=deps)
+
+    assert len(fake.created) == 1
+    assert fake.created[0]["name"] == "ping"
+    assert "created scheduled_task" in result.body
+
+
+async def test_list_scheduled_tasks_tool_routes_through_toolset() -> None:
+    from datetime import UTC, datetime
+
+    fake = _FakeScheduledTasks()
+    await fake.create_once(
+        assistant_id="a-1",
+        run_at=datetime(2026, 5, 12, tzinfo=UTC),
+        name="weekly-review",
+        body="review",
+    )
+    agent = AssistantAgent()
+    deps = _deps(scheduled_tasks=fake)
+
+    with agent.override_model(_scope(), _call_then_echo("list_scheduled_tasks", {})):
+        result = await agent.run(_scope(), prompt="list please", deps=deps)
+
+    assert "weekly-review" in result.body
+
+
+async def test_delete_scheduled_task_tool_routes_through_toolset() -> None:
+    from datetime import UTC, datetime
+
+    fake = _FakeScheduledTasks()
+    await fake.create_once(
+        assistant_id="a-1",
+        run_at=datetime(2026, 5, 12, tzinfo=UTC),
+        name="gone",
+        body="x",
+    )
+    agent = AssistantAgent()
+    deps = _deps(scheduled_tasks=fake)
+
+    with agent.override_model(
+        _scope(),
+        _call_then_echo("delete_scheduled_task", {"task_id": "st-1"}),
+    ):
+        result = await agent.run(_scope(), prompt="delete it", deps=deps)
+
+    assert fake.deleted == ["st-1"]
+    assert "deleted scheduled_task st-1" in result.body
 
 
 async def test_run_wraps_underlying_exception_with_partial_usage_and_steps() -> None:

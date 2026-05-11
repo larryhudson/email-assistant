@@ -396,7 +396,17 @@ async def _seed_assistant(
             AssistantScopeRow(
                 assistant_id=assistant_id,
                 memory_namespace=memory_namespace or assistant_id,
-                tool_allowlist=["read", "write", "edit", "bash", "memory_search", "attach_file"],
+                tool_allowlist=[
+                    "read",
+                    "write",
+                    "edit",
+                    "bash",
+                    "memory_search",
+                    "attach_file",
+                    "list_scheduled_tasks",
+                    "create_scheduled_task",
+                    "delete_scheduled_task",
+                ],
                 budget_id=budget_id,
             )
         )

@@ -4,6 +4,7 @@ from typing import Protocol
 
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import PendingAttachment
+from email_agent.models.scheduled import ScheduledTask
 
 
 class _ToolsetLike(Protocol):
@@ -18,6 +19,12 @@ class _ToolsetLike(Protocol):
     async def attach_file(self, path: str, filename: str | None = None) -> str: ...
 
     async def memory_search(self, query: str) -> list[Memory]: ...
+
+    async def list_scheduled_tasks(self) -> list[ScheduledTask]: ...
+
+    async def create_scheduled_task(self, kind: str, when: str, name: str, body: str) -> str: ...
+
+    async def delete_scheduled_task(self, task_id: str) -> str: ...
 
 
 @dataclass

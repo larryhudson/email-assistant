@@ -22,6 +22,7 @@ from email_agent.models.agent import (
 )
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.memory import Memory
+from email_agent.models.scheduled import ScheduledTask
 from email_agent.sandbox.skills import SYSTEM_PROMPT_GUIDANCE
 
 
@@ -102,6 +103,34 @@ class AssistantAgent:
         async def bash(ctx: RunContext[AgentDeps], command: str) -> str:
             """Run a bash command in the sandbox; returns combined stdout/stderr."""
             return await ctx.deps.toolset.bash(command)
+
+        @agent.tool
+        async def list_scheduled_tasks(ctx: RunContext[AgentDeps]) -> list[ScheduledTask]:
+            """List scheduled tasks for this assistant (both ONCE and CRON kinds)."""
+            return await ctx.deps.toolset.list_scheduled_tasks()
+
+        @agent.tool
+        async def create_scheduled_task(
+            ctx: RunContext[AgentDeps],
+            kind: str,
+            when: str,
+            name: str,
+            body: str,
+        ) -> str:
+            """Create a scheduled task that fires a synthetic inbound to this assistant.
+
+            `kind` is 'once' or 'cron'. For 'once', `when` is an ISO-8601
+            timezone-aware datetime (e.g. '2026-05-12T09:00:00+10:00'); for
+            'cron', `when` is a 5-field cron expression (e.g. '0 9 * * *').
+            `name` is a short label used as the synthetic inbound's subject;
+            `body` is the prompt the agent will receive when the task fires.
+            """
+            return await ctx.deps.toolset.create_scheduled_task(kind, when, name, body)
+
+        @agent.tool
+        async def delete_scheduled_task(ctx: RunContext[AgentDeps], task_id: str) -> str:
+            """Delete a scheduled task owned by this assistant by its id."""
+            return await ctx.deps.toolset.delete_scheduled_task(task_id)
 
         return agent
 
