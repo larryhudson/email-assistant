@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from email_agent.agent.assistant_agent import AssistantAgent
+from email_agent.agent.run_context import RunContextAssembler
 from email_agent.db.models import (
     AgentRun,
     Assistant,
@@ -168,6 +169,7 @@ class AssistantRuntime:
         self._run_timeout_seconds = run_timeout_seconds
         self._model_factory = model_factory
         self._run_agent_defer = run_agent_defer
+        self._context_assembler = RunContextAssembler()
 
     async def accept_inbound(self, email: NormalizedInboundEmail) -> AcceptOutcome:
         outcome = await self._router.resolve(email)
@@ -274,22 +276,11 @@ class AssistantRuntime:
             query=recall_query,
         )
         await self._persist_memory_recalls(run_id, memory_context.memories)
-        if memory_context.memories:
-            memory_block = "\n\nRecalled memory:\n" + "\n".join(
-                f"- {m.content}" for m in memory_context.memories
-            )
-        else:
-            memory_block = ""
-
-        prompt = (
-            f"A new inbound email has arrived. Read it from {projection.current_message_path!r} "
-            f"using the `read` tool. Your final response (a plain string returned from this run) "
-            f"becomes the body of the reply email — do NOT write the reply to disk, and do NOT "
-            f"modify anything under emails/ (that directory is the read-only thread history). "
-            f"Use `write`/`edit`/`bash` only if you need scratch files under other paths. "
-            f"Use `memory_search` to look up prior context. Use `attach_file` only if you "
-            f"genuinely need to attach a generated artefact." + memory_block
+        prompt_context = self._context_assembler.build(
+            current_message_path=projection.current_message_path,
+            memories=memory_context.memories,
         )
+        prompt = prompt_context.prompt
 
         # If a model_factory is wired in (production), apply it for the run;
         # otherwise rely on a test having called agent.override_model itself.
