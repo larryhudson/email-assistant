@@ -58,6 +58,7 @@ from email_agent.models.sandbox import PendingAttachment, ProjectedFile
 from email_agent.sandbox.skills import render_context_block, render_skills_block
 from email_agent.sandbox.workspace import AssistantWorkspace
 from email_agent.sandbox.workspace_provider import WorkspaceProvider
+from email_agent.scheduled.service import ScheduledTaskService
 
 
 class _EmailProviderLike(Protocol):
@@ -138,6 +139,7 @@ class AssistantRuntime:
         run_timeout_seconds: float | None = None,
         model_factory: "Callable[[AssistantScope], Model] | None" = None,
         run_agent_defer: Callable[..., Awaitable[None]] | None = None,
+        scheduled_tasks: ScheduledTaskService | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._attachments_root = attachments_root
@@ -158,7 +160,12 @@ class AssistantRuntime:
         self._run_timeout_seconds = run_timeout_seconds
         self._model_factory = model_factory
         self._run_agent_defer = run_agent_defer
+        self._scheduled_tasks = scheduled_tasks or ScheduledTaskService(session_factory)
         self._context_assembler = RunContextAssembler()
+
+    @property
+    def scheduled_tasks(self) -> ScheduledTaskService:
+        return self._scheduled_tasks
 
     async def accept_inbound(self, email: NormalizedInboundEmail) -> AcceptOutcome:
         outcome = await self._router.resolve(email)
@@ -276,6 +283,7 @@ class AssistantRuntime:
                 workspace=workspace,
                 memory=self._memory,
                 pending_attachments=pending_attachments,
+                scheduled_tasks=self._scheduled_tasks,
             ),
             pending_attachments=pending_attachments,
             skills_block=skills_block,

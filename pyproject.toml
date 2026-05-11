@@ -8,6 +8,7 @@ dependencies = [
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
     "cognee>=1.0.2",
+    "croniter>=6.2.2",
     "docker>=7.1.0",
     "fastapi>=0.136.1",
     "httpx>=0.28.1",

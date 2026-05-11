@@ -202,6 +202,9 @@ class AgentRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    triggered_by_scheduled_task_id: Mapped[str | None] = mapped_column(
+        ForeignKey("scheduled_tasks.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class RunStep(Base):
@@ -260,6 +263,35 @@ class UsageLedger(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ScheduledTaskRow(Base):
+    """Persisted form of `models.scheduled.ScheduledTask`.
+
+    Driver `tick_scheduled_tasks` (procrastinate periodic, once per minute)
+    claims rows where `status='active'` and `next_run_at <= now()` using
+    `SELECT ... FOR UPDATE SKIP LOCKED` so concurrent ticks can't double-fire.
+    """
+
+    __tablename__ = "scheduled_tasks"
+
+    id: Mapped[str] = _str_pk()
+    assistant_id: Mapped[str] = mapped_column(ForeignKey("assistants.id"))
+    kind: Mapped[str] = mapped_column(String(16))
+    run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cron_expr: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    name: Mapped[str] = mapped_column(String(998))
+    body: Mapped[str] = mapped_column(Text)
+    created_by_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_runs.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Budget(Base):
     """Monthly spend cap for one assistant. DB-only; surfaced in `AssistantScope`."""
 
@@ -286,5 +318,6 @@ __all__ = [
     "MessageIndex",
     "Owner",
     "RunStep",
+    "ScheduledTaskRow",
     "UsageLedger",
 ]

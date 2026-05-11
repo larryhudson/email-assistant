@@ -14,6 +14,11 @@ from email_agent.models.sandbox import (
     ToolCall,
     ToolResult,
 )
+from email_agent.models.scheduled import (
+    ScheduledTask,
+    ScheduledTaskKind,
+    ScheduledTaskStatus,
+)
 
 __all__ = [
     "AssistantScope",
@@ -26,6 +31,9 @@ __all__ = [
     "NormalizedOutboundEmail",
     "PendingAttachment",
     "ProjectedFile",
+    "ScheduledTask",
+    "ScheduledTaskKind",
+    "ScheduledTaskStatus",
     "SentEmail",
     "ToolCall",
     "ToolResult",
