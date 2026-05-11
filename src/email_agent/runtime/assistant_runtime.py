@@ -362,36 +362,58 @@ class AssistantRuntime:
             )
             raise
 
-        attachment_models = await _read_attachments_out(
-            workspace,
-            deps.pending_attachments,
-        )
+        # Anything that raises between here and record_completion (attachment
+        # read-out, markdown rendering, mailgun send, recorder write) leaves
+        # the run un-recorded and the end user/owner uninformed. Treat those
+        # the same as a mid-run model failure: persist the partial usage we
+        # already have, fire the two failure notifications, then re-raise so
+        # procrastinate sees the underlying error.
+        try:
+            attachment_models = await _read_attachments_out(
+                workspace,
+                deps.pending_attachments,
+            )
 
-        envelope = self._envelope_builder.build(
-            inbound=inbound_email,
-            from_email=scope.inbound_address,
-            body_text=agent_result.body,
-            attachments=attachment_models,
-            message_id_factory=self._message_id_factory,
-            run_footer=RunFooterContext(
+            envelope = self._envelope_builder.build(
+                inbound=inbound_email,
+                from_email=scope.inbound_address,
+                body_text=agent_result.body,
+                attachments=attachment_models,
+                message_id_factory=self._message_id_factory,
+                run_footer=RunFooterContext(
+                    usage=agent_result.usage,
+                    run_id=run_id,
+                    admin_base_url=self._admin_base_url,
+                ),
+            )
+
+            sent = await self._email_provider.send_reply(envelope)
+
+            await self._recorder.record_completion(
+                CompletedRun(
+                    run_id=run_id,
+                    scope=scope,
+                    outbound=envelope,
+                    sent=sent,
+                    steps=agent_result.steps,
+                    usage=agent_result.usage,
+                )
+            )
+        except Exception as exc:
+            await self._recorder.record_failure(
+                run_id,
+                error=str(exc),
                 usage=agent_result.usage,
-                run_id=run_id,
-                admin_base_url=self._admin_base_url,
-            ),
-        )
-
-        sent = await self._email_provider.send_reply(envelope)
-
-        await self._recorder.record_completion(
-            CompletedRun(
+                steps=agent_result.steps,
+                model_name=scope.model_name,
+            )
+            await self._notify_run_failed(
                 run_id=run_id,
                 scope=scope,
-                outbound=envelope,
-                sent=sent,
-                steps=agent_result.steps,
-                usage=agent_result.usage,
+                inbound_email=inbound_email,
+                exception=exc,
             )
-        )
+            raise
 
         return Completed(run_id=run_id, sent=sent)
 

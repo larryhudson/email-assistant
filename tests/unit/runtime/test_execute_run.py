@@ -673,3 +673,78 @@ async def test_execute_run_enforces_run_timeout(
         assert run.status == "failed"
         assert run.error is not None
         assert "timeout" in run.error.lower() or "timed out" in run.error.lower()
+
+
+async def test_execute_run_notifies_on_failure_after_agent_succeeded(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """If something blows up AFTER agent.run finished — e.g. envelope
+    building, markdown rendering, mailgun send, or the recorder write —
+    the user-facing apology and owner notification must still fire and
+    the run must be recorded failed. Otherwise a misrendered body
+    would silently drop the response without anyone knowing.
+    """
+    import pytest
+    from pydantic_ai.models.test import TestModel
+
+    from email_agent.models.email import NormalizedOutboundEmail, SentEmail
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+        owner = await session.get(Owner, "o-1")
+        assert owner is not None
+        owner.email = "owner@example.com"
+        await session.commit()
+
+    class _RaisingProvider:
+        def __init__(self) -> None:
+            self.attempts: list[NormalizedOutboundEmail] = []
+
+        async def send_reply(self, reply: NormalizedOutboundEmail) -> SentEmail:
+            self.attempts.append(reply)
+            if len(self.attempts) == 1 and reply.in_reply_to_header is not None:
+                # The first successful-reply send blows up after the agent run.
+                raise RuntimeError("smtp explosion")
+            # Subsequent sends (the end-user apology + owner notification)
+            # succeed so the test can observe them.
+            return SentEmail(
+                provider_message_id=f"p{len(self.attempts)}",
+                message_id_header=reply.message_id_header,
+            )
+
+    provider = _RaisingProvider()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    agent = AssistantAgent()
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=provider,  # ty: ignore[invalid-argument-type]
+        workspace_provider=StaticWorkspaceProvider(workspace),
+        memory=InMemoryMemoryAdapter(),
+        agent=agent,
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    with (
+        agent.override_model(_scope(), TestModel(custom_output_text="hello back")),
+        pytest.raises(RuntimeError, match="smtp explosion"),
+    ):
+        await runtime.execute_run(run_id)
+
+    # 1 attempted real reply (exploded) + 2 failure notifications.
+    assert len(provider.attempts) == 3
+    end_user_apology, owner_note = provider.attempts[1], provider.attempts[2]
+    assert end_user_apology.to_emails == ["mum@example.com"]
+    assert end_user_apology.in_reply_to_header is not None
+    assert "smtp explosion" not in end_user_apology.body_text
+    assert owner_note.to_emails == ["owner@example.com"]
+    assert owner_note.in_reply_to_header is None
+    assert "smtp explosion" in owner_note.body_text
+
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun))).scalar_one()
+        assert run.status == "failed"
+        assert "smtp explosion" in (run.error or "")

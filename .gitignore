@@ -26,3 +26,7 @@ dev.log
 # Editor
 .vscode/
 .idea/
+
+# Local agent state
+.claude/
+TODO.md
