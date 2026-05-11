@@ -74,15 +74,18 @@ async def ensure_starter_files(env: SandboxEnvironment) -> None:
 def render_skills_block(skills: list[Skill]) -> str:
     if not skills:
         return ""
-    lines = ["# Available skills", ""]
+    lines = [
+        "# Available skills",
+        "",
+        "Only the name + description for each skill is listed here. When a skill",
+        "looks relevant to the current task, use the `read` tool on its path to",
+        "load the full body before following it.",
+        "",
+    ]
     for skill in skills:
-        lines.append(f"## {skill.name}")
-        lines.append(f"Location: {skill.path}")
+        lines.append(f"- **{skill.name}** ({skill.path})")
         if skill.description:
-            lines.append(skill.description)
-        lines.append("")
-        lines.append(skill.body.strip())
-        lines.append("")
+            lines.append(f"  {skill.description}")
     return "\n".join(lines).rstrip()
 
 
@@ -97,9 +100,11 @@ SYSTEM_PROMPT_GUIDANCE = (
     "  * /workspace/CONTEXT.md — durable notes about the user (who they are, "
     "their preferences, working style). Read it for context and update it via "
     "the `edit` tool whenever you learn something durable. Keep it concise.\n"
-    "  * /workspace/skills/<name>/SKILL.md — reusable playbooks. You may add a "
-    "new skill by writing a new SKILL.md; it will be auto-loaded on the next "
-    "run. See the `writing-skills` skill for the file format."
+    "  * /workspace/skills/<name>/SKILL.md — reusable playbooks. The section "
+    "below lists each skill by name + description only; when one looks relevant, "
+    "use the `read` tool on its path to load the full body before following it. "
+    "You may add a new skill by writing a new SKILL.md; it will be auto-loaded "
+    "on the next run. See the `writing-skills` skill for the file format."
 )
 
 
@@ -127,9 +132,7 @@ def _parse_skill(raw: str, *, default_name: str) -> tuple[str, str, str]:
     return name, description, body
 
 
-_STARTER_CONTEXT_MD = """# CONTEXT.md
-
-Long-term notes about the user. Keep this short and high-signal. Update via
+_STARTER_CONTEXT_MD = """Long-term notes about the user. Keep this short and high-signal. Update via
 the `edit` tool when you learn something durable (preferences, working style,
 recurring projects, key relationships). This file is injected into your
 system prompt every run.
@@ -166,8 +169,10 @@ Steps to add a skill:
 4. The next run will see the skill automatically — no restart needed.
 
 Keep skills focused (one workflow per skill) and concrete (include examples
-of inputs/outputs). Skills are appended verbatim to your system prompt, so
-every token costs — write tight.
+of inputs/outputs). Only the skill's name + description are listed in the
+system prompt; the body is loaded on demand via the `read` tool when the
+agent decides the skill is relevant. Still write tight — a clear description
+helps the agent know when to reach for the skill.
 """
 
 
@@ -180,7 +185,8 @@ description: Curate /workspace/CONTEXT.md with durable knowledge about the user.
 
 `/workspace/CONTEXT.md` is your long-term scratchpad for facts about the
 user that should survive across runs. The whole file is injected into your
-system prompt every run, so keep it tight.
+system prompt every run (unlike skills, which are listed by name only and
+loaded on demand), so keep it tight.
 
 What belongs:
 - Identity: name, role, company, timezone.

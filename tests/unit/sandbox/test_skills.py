@@ -97,18 +97,19 @@ async def test_skill_written_during_one_run_is_visible_to_next_load() -> None:
     assert "drafting-replies" in next_names - starter_names
 
 
-async def test_render_skills_block_includes_name_description_and_body() -> None:
+async def test_render_skills_block_is_manifest_only() -> None:
     env = InMemoryEnvironment()
     await env.mkdir("/workspace/skills/triage", parents=True)
     await env.write_text(
         "/workspace/skills/triage/SKILL.md",
-        "---\nname: triage\ndescription: triage mail\n---\n\nbody text",
+        "---\nname: triage\ndescription: triage mail\n---\n\nsecret body text",
     )
 
     rendered = render_skills_block(await load_skills(env))
     assert "triage" in rendered
     assert "triage mail" in rendered
-    assert "body text" in rendered
+    assert "/workspace/skills/triage/SKILL.md" in rendered
+    assert "secret body text" not in rendered
 
 
 def test_render_skills_block_empty_when_no_skills() -> None:
