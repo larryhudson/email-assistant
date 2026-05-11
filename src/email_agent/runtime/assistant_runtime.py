@@ -42,6 +42,7 @@ from email_agent.domain.router import (
     RouteRejection,
     RouteRejectionReason,
 )
+from email_agent.domain.run_footer import strip_footer
 from email_agent.domain.run_recorder import CompletedRun, RunRecorder
 from email_agent.domain.thread_resolver import ThreadResolver
 from email_agent.domain.workspace_projector import EmailWorkspaceProjector
@@ -170,6 +171,10 @@ class AssistantRuntime:
         return self._scheduled_tasks
 
     async def accept_inbound(self, email: NormalizedInboundEmail) -> AcceptOutcome:
+        # Drop our own outbound footer if a reply quotes it. Done here, at the
+        # single runtime seam, so every adapter (Mailgun, eml, future ones)
+        # stays a faithful transport — the domain owns marker semantics.
+        email = email.model_copy(update={"body_text": strip_footer(email.body_text)})
         outcome = await self._router.resolve(email)
         if isinstance(outcome, RouteRejection):
             return Dropped(reason=outcome.reason, detail=outcome.detail)
