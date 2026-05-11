@@ -1,6 +1,7 @@
 from contextlib import contextmanager
+from decimal import Decimal
 
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, RunContext, capture_run_messages
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -12,7 +13,13 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.test import TestModel
 
 from email_agent.agent.pricing import estimate_cost_usd
-from email_agent.models.agent import AgentDeps, AgentResult, RunStepRecord, RunUsage
+from email_agent.models.agent import (
+    AgentDeps,
+    AgentResult,
+    AgentRunError,
+    RunStepRecord,
+    RunUsage,
+)
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.memory import Memory
 from email_agent.sandbox.skills import SYSTEM_PROMPT_GUIDANCE
@@ -112,7 +119,18 @@ class AssistantAgent:
 
     async def run(self, scope: AssistantScope, *, prompt: str, deps: AgentDeps) -> AgentResult:
         agent = self._agent_for(scope)
-        result = await agent.run(prompt, deps=deps)
+        # capture_run_messages retains the request/response log even when
+        # agent.run raises — so a run that fails after N tool calls still
+        # exposes N model responses (with per-request usage) and the tool
+        # history. We use that to populate `AgentRunError` so the recorder
+        # can persist partial usage + steps instead of dropping them.
+        with capture_run_messages() as captured:
+            try:
+                result = await agent.run(prompt, deps=deps)
+            except Exception as exc:
+                partial_usage = _summarise_partial_usage(captured, scope)
+                partial_steps = _extract_steps(list(captured))
+                raise AgentRunError(exc, usage=partial_usage, steps=partial_steps) from exc
         usage = result.usage()
         input_tokens = usage.input_tokens or 0
         output_tokens = usage.output_tokens or 0
@@ -131,6 +149,38 @@ class AssistantAgent:
             ),
             steps=_extract_steps(result.all_messages()),
         )
+
+
+def _summarise_partial_usage(messages: list[ModelMessage], scope: AssistantScope) -> RunUsage:
+    """Sum per-response usage across all ModelResponse messages captured so far.
+
+    Each ModelResponse carries a RequestUsage; cumulative input/output tokens
+    sum to the same totals as result.usage() on a completed run.
+    """
+    input_tokens = 0
+    output_tokens = 0
+    cache_read_tokens = 0
+    for msg in messages:
+        if not isinstance(msg, ModelResponse):
+            continue
+        usage = getattr(msg, "usage", None)
+        if usage is None:
+            continue
+        input_tokens += usage.input_tokens or 0
+        output_tokens += usage.output_tokens or 0
+        cache_read_tokens += getattr(usage, "cache_read_tokens", 0) or 0
+    return RunUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=estimate_cost_usd(
+            model=scope.model_name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+        )
+        if input_tokens or output_tokens
+        else Decimal("0"),
+    )
 
 
 def _extract_steps(messages: list[ModelMessage]) -> list[RunStepRecord]:

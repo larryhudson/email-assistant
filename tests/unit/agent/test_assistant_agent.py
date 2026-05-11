@@ -294,3 +294,41 @@ async def test_scope_system_prompt_still_present() -> None:
 
     assert captured["instructions"] is not None
     assert "be kind" in captured["instructions"]
+
+
+async def test_run_wraps_underlying_exception_with_partial_usage_and_steps() -> None:
+    """When the agent crashes after some tool calls, AssistantAgent.run must
+    raise AgentRunError carrying the partial usage + step trace so the
+    recorder can persist them (otherwise the budget cap drifts silently
+    and the admin trace is empty for failed runs).
+    """
+    import pytest
+
+    from email_agent.models.agent import AgentRunError
+
+    call_count = {"n": 0}
+
+    async def crash_after_one_tool(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return ModelResponse(parts=[ToolCallPart(tool_name="read", args={"path": "x"})])
+        raise RuntimeError("model boom")
+
+    agent = AssistantAgent()
+    deps = _deps()
+
+    with (
+        pytest.raises(AgentRunError) as excinfo,
+        agent.override_model(_scope(), FunctionModel(crash_after_one_tool)),
+    ):
+        await agent.run(_scope(), prompt="trigger", deps=deps)
+
+    failed = excinfo.value
+    assert isinstance(failed.original, RuntimeError)
+    assert "model boom" in str(failed.original)
+    # Captured usage from the one successful model response before the crash.
+    assert failed.usage.input_tokens > 0
+    assert failed.usage.output_tokens > 0
+    # Step trace contains the read tool call that succeeded.
+    kinds = [s.kind for s in failed.steps]
+    assert "tool:read" in kinds

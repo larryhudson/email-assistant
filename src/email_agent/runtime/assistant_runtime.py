@@ -51,7 +51,7 @@ from email_agent.domain.run_footer import strip_footer
 from email_agent.domain.run_recorder import CompletedRun, RunRecorder
 from email_agent.domain.thread_resolver import ThreadResolver
 from email_agent.domain.workspace_projector import EmailWorkspaceProjector
-from email_agent.models.agent import AgentDeps
+from email_agent.models.agent import AgentDeps, AgentRunError
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.email import (
     EmailAttachment,
@@ -333,6 +333,25 @@ class AssistantRuntime:
                 exception=exc,
             )
             raise
+        except AgentRunError as wrapped:
+            # Partial usage + steps were captured before the underlying
+            # exception. Persist them so the admin trace + usage_ledger
+            # reflect how far the run got. Then re-raise the ORIGINAL
+            # exception so procrastinate sees the real failure mode.
+            await self._recorder.record_failure(
+                run_id,
+                error=str(wrapped.original),
+                usage=wrapped.usage,
+                steps=wrapped.steps,
+                model_name=scope.model_name,
+            )
+            await self._notify_run_failed(
+                run_id=run_id,
+                scope=scope,
+                inbound_email=inbound_email,
+                exception=wrapped.original,
+            )
+            raise wrapped.original from None
         except Exception as exc:
             await self._recorder.record_failure(run_id, error=str(exc))
             await self._notify_run_failed(

@@ -70,9 +70,30 @@ class AgentResult:
     steps: list["RunStepRecord"] = field(default_factory=list)
 
 
+class AgentRunError(Exception):
+    """Raised by `AssistantAgent.run` when the underlying pydantic-ai run
+    raised. Carries whatever usage + step trace was accumulated before the
+    failure so the recorder can persist them — otherwise an exception after
+    N tool calls would silently drop the cost and the trace.
+    """
+
+    def __init__(
+        self,
+        original: BaseException,
+        *,
+        usage: RunUsage,
+        steps: list[RunStepRecord],
+    ) -> None:
+        super().__init__(str(original))
+        self.original = original
+        self.usage = usage
+        self.steps = steps
+
+
 __all__ = [
     "AgentDeps",
     "AgentResult",
+    "AgentRunError",
     "RunStepRecord",
     "RunUsage",
 ]

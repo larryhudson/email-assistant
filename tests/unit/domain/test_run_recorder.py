@@ -269,6 +269,80 @@ async def test_record_failure_marks_run_failed(
         assert len(outbound_msgs) == 0
 
 
+async def test_record_failure_persists_partial_usage_and_steps_when_provided(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """Partial state captured before the agent crashed must land in the DB
+    so the budget cap stays accurate and the admin trace shows progress.
+    """
+    from email_agent.db.models import RunStep, UsageLedger
+    from email_agent.models.agent import RunStepRecord, RunUsage
+
+    async with sqlite_session_factory() as session:
+        run_id, _ = await _seed_run(session, tmp_path=tmp_path)
+
+    recorder = RunRecorder(sqlite_session_factory)
+    partial_usage = RunUsage(
+        input_tokens=120,
+        output_tokens=45,
+        cost_usd=Decimal("0.0034"),
+    )
+    partial_steps = [
+        RunStepRecord(kind="tool:read", input_summary='{"path": "x"}', output_summary="x-body"),
+        RunStepRecord(kind="model", input_summary="", output_summary="<tool plan>"),
+    ]
+    await recorder.record_failure(
+        run_id,
+        error="model boom",
+        usage=partial_usage,
+        steps=partial_steps,
+        model_name="test-model",
+    )
+
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun))).scalar_one()
+        assert run.status == "failed"
+
+        steps = (await session.execute(select(RunStep))).scalars().all()
+        assert sorted(s.kind for s in steps) == ["model", "tool:read"]
+
+        ledger = (await session.execute(select(UsageLedger))).scalars().all()
+        assert len(ledger) == 1
+        assert ledger[0].input_tokens == 120
+        assert ledger[0].output_tokens == 45
+        assert ledger[0].model == "test-model"
+
+
+async def test_record_failure_omits_ledger_when_no_usage(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """A run that crashed before any model response was completed has zero
+    captured usage — no UsageLedger row should be written for it.
+    """
+    from email_agent.db.models import RunStep, UsageLedger
+    from email_agent.models.agent import RunUsage
+
+    async with sqlite_session_factory() as session:
+        run_id, _ = await _seed_run(session, tmp_path=tmp_path)
+
+    recorder = RunRecorder(sqlite_session_factory)
+    await recorder.record_failure(
+        run_id,
+        error="boom before any response",
+        usage=RunUsage(input_tokens=0, output_tokens=0, cost_usd=Decimal("0")),
+        steps=[],
+        model_name="test-model",
+    )
+
+    async with sqlite_session_factory() as session:
+        steps = (await session.execute(select(RunStep))).scalars().all()
+        assert steps == []
+        ledger = (await session.execute(select(UsageLedger))).scalars().all()
+        assert ledger == []
+
+
 async def test_record_completion_calls_curate_memory_defer(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,

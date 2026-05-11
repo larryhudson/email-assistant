@@ -108,7 +108,20 @@ class RunRecorder:
                 run_id=completed.run_id,
             )
 
-    async def record_failure(self, run_id: str, *, error: str) -> None:
+    async def record_failure(
+        self,
+        run_id: str,
+        *,
+        error: str,
+        usage: RunUsage | None = None,
+        steps: list[RunStepRecord] | None = None,
+        model_name: str | None = None,
+    ) -> None:
+        """Mark the run failed. If partial usage / steps were captured from
+        the underlying agent run before it raised, persist them too so the
+        admin trace shows how far the run got and the budget cap stays
+        accurate even when runs fail after burning tokens.
+        """
         async with self._session_factory() as session:
             run = await session.get(AgentRun, run_id)
             if run is None:
@@ -117,6 +130,35 @@ class RunRecorder:
             run.status = "failed"
             run.error = error
             run.completed_at = datetime.now(UTC)
+
+            if steps:
+                for step in steps:
+                    session.add(
+                        RunStep(
+                            id=f"s-{uuid.uuid4().hex[:8]}",
+                            run_id=run.id,
+                            kind=step.kind,
+                            input_summary=step.input_summary,
+                            output_summary=step.output_summary,
+                            cost_usd=step.cost_usd,
+                        )
+                    )
+
+            if usage is not None and (usage.input_tokens or usage.output_tokens):
+                session.add(
+                    UsageLedger(
+                        id=f"u-{uuid.uuid4().hex[:8]}",
+                        assistant_id=run.assistant_id,
+                        run_id=run.id,
+                        provider="openai-compat",
+                        model=model_name or "",
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                        cost_usd=usage.cost_usd,
+                        budget_period=datetime.now(UTC).strftime("%Y-%m"),
+                    )
+                )
+
             await session.commit()
 
 
