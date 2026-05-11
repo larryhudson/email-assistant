@@ -30,7 +30,7 @@ def build_end_user_error_envelope(
 ) -> NormalizedOutboundEmail:
     body = (
         "Sorry — something went wrong while processing your message and no "
-        "reply was generated. The team has been notified.\n"
+        "reply was generated. The admin has been notified.\n"
         "\n"
         "This is an automated notice; please do not reply.\n"
         "\n"

@@ -5,5 +5,5 @@
 #   Runs under watchfiles so code edits in src/ restart the worker.
 #   Sends real Mailgun replies. Set EMAIL_AGENT_WORKER_DRY_RUN=true on the
 #   worker line to suppress sends during local testing.
-web: uv run email-agent web --host 127.0.0.1 --port 10000
+web: uv run email-agent web --host 127.0.0.1 --port 18791
 worker: uv run email-agent worker-dev
