@@ -512,7 +512,7 @@ def worker_dev(
     ),
 ) -> None:
     """Run the Procrastinate worker with auto-reload for local development."""
-    from watchfiles import run_process
+    from watchfiles import Change, run_process
 
     command_args = ["-m", "email_agent.cli", "worker", "--concurrency", str(concurrency)]
     for queue in queues or []:
@@ -520,7 +520,7 @@ def worker_dev(
 
     watch_paths = [str(path) for path in (reload_dirs or [Path("src")])]
 
-    def _changed(changes: set[tuple[object, str]]) -> None:
+    def _changed(changes: set[tuple[Change, str]]) -> None:
         changed = ", ".join(sorted({path for _, path in changes})[:3])
         suffix = f": {changed}" if changed else ""
         typer.secho(f"reloading worker{suffix}", fg="yellow")
