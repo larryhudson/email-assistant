@@ -11,9 +11,11 @@ from email_agent.models.email import (
     NormalizedOutboundEmail,
 )
 
-# commonmark preset disables raw-HTML pass-through, so literal `<script>` etc.
-# in the agent's body gets escaped to `&lt;script&gt;` rather than rendered.
-_MD = MarkdownIt("commonmark", {"html": False})
+# gfm-like = CommonMark + tables + strikethrough + autolinks (bare URLs
+# become clickable) + task lists. Matches what LLMs reach for by default,
+# and what mail clients are happy to render. `html=False` keeps raw HTML
+# in the agent body escaped (no <script> injection from a chatty model).
+_MD = MarkdownIt("gfm-like", {"html": False})
 
 
 def render_markdown_to_html(body_text: str) -> str:
