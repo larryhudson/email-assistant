@@ -32,6 +32,7 @@ class Owner(Base):
 
     id: Mapped[str] = _str_pk()
     name: Mapped[str] = mapped_column(String(255))
+    email: Mapped[str] = mapped_column(String(320), default="", server_default="")
     primary_admin_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     billing_scope: Mapped[str] = mapped_column(String(64), default="self")
 
