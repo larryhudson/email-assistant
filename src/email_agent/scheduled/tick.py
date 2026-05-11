@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from email_agent.db.models import AgentRun, Assistant, EndUser, ScheduledTaskRow
 from email_agent.models.email import NormalizedInboundEmail
-from email_agent.models.scheduled import ScheduledTaskStatus
+from email_agent.models.scheduled import ScheduledTaskKind, ScheduledTaskStatus
 from email_agent.runtime.assistant_runtime import Accepted, Dropped
 
 if TYPE_CHECKING:
@@ -69,6 +69,9 @@ async def tick_scheduled_tasks_impl(
         result = await session.execute(stmt)
         rows = result.scalars().all()
 
+        # Updates to scheduled_tasks (mark_fired) and agent_runs (tag) all run
+        # against the OUTER session below — opening a separate session for them
+        # would deadlock against the SELECT FOR UPDATE we just took.
         for row in rows:
             assistant = await session.get(Assistant, row.assistant_id)
             if assistant is None:
@@ -104,12 +107,26 @@ async def tick_scheduled_tasks_impl(
                 continue
 
             assert isinstance(outcome, Accepted)
-            await _tag_run_with_trigger(
-                session_factory,
-                inbound_message_id=outcome.message_id,
-                scheduled_task_id=row.id,
-            )
-            await service.mark_fired(task_id=row.id, fired_at=now)
+            run = (
+                await session.execute(
+                    select(AgentRun).where(AgentRun.inbound_message_id == outcome.message_id)
+                )
+            ).scalar_one_or_none()
+            if run is None:
+                logger.warning(
+                    "scheduled_task %s: no AgentRun for inbound_message_id=%s",
+                    row.id,
+                    outcome.message_id,
+                )
+            else:
+                run.triggered_by_scheduled_task_id = row.id
+
+            row.last_run_at = now
+            if row.kind == ScheduledTaskKind.ONCE.value:
+                row.status = ScheduledTaskStatus.COMPLETED.value
+            else:
+                assert row.cron_expr is not None
+                row.next_run_at = service.compute_next_run(row.cron_expr, now)
 
         await session.commit()
 
@@ -133,29 +150,6 @@ def _build_synthetic_inbound(
         body_text=marker + row.body,
         received_at=now,
     )
-
-
-async def _tag_run_with_trigger(
-    session_factory: async_sessionmaker[AsyncSession],
-    *,
-    inbound_message_id: str,
-    scheduled_task_id: str,
-) -> None:
-    async with session_factory() as session:
-        run = (
-            await session.execute(
-                select(AgentRun).where(AgentRun.inbound_message_id == inbound_message_id)
-            )
-        ).scalar_one_or_none()
-        if run is None:
-            logger.warning(
-                "scheduled_task %s: no AgentRun for inbound_message_id=%s",
-                scheduled_task_id,
-                inbound_message_id,
-            )
-            return
-        run.triggered_by_scheduled_task_id = scheduled_task_id
-        await session.commit()
 
 
 __all__ = ["tick_scheduled_tasks_impl"]
