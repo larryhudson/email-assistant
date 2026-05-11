@@ -55,6 +55,7 @@ from email_agent.models.email import (
 )
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import PendingAttachment, ProjectedFile
+from email_agent.sandbox.skills import render_context_block, render_skills_block
 from email_agent.sandbox.workspace import AssistantWorkspace
 from email_agent.sandbox.workspace_provider import WorkspaceProvider
 
@@ -244,6 +245,9 @@ class AssistantRuntime:
         )
         projected_files = _read_projection_files(projection.run_inputs_dir)
         await workspace.project_emails(projected_files)
+        await workspace.ensure_starter_files()
+        skills_block = render_skills_block(await workspace.load_skills())
+        context_block = render_context_block(await workspace.read_context())
 
         # Pre-call recall once with the inbound body (truncated) as the query.
         # Reliable beats clever — gives the model prior context without it
@@ -274,6 +278,8 @@ class AssistantRuntime:
                 pending_attachments=pending_attachments,
             ),
             pending_attachments=pending_attachments,
+            skills_block=skills_block,
+            context_block=context_block,
         )
 
         # If a model_factory is wired in (production), apply it for the run;

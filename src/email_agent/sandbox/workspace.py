@@ -2,6 +2,12 @@ from pathlib import PurePosixPath
 
 from email_agent.models.sandbox import ProjectedFile
 from email_agent.sandbox.environment import SandboxEnvironment
+from email_agent.sandbox.skills import (
+    Skill,
+    ensure_starter_files,
+    load_skills,
+    read_context,
+)
 
 WORKSPACE_ROOT = "/workspace"
 EMAILS_DIR = "/workspace/emails"
@@ -39,6 +45,15 @@ class AssistantWorkspace:
 
     async def read_outbound_attachment(self, path: str) -> bytes:
         return await self._env.read_bytes(self._workspace_path(path))
+
+    async def load_skills(self) -> list[Skill]:
+        return await load_skills(self._env)
+
+    async def read_context(self) -> str | None:
+        return await read_context(self._env)
+
+    async def ensure_starter_files(self) -> None:
+        await ensure_starter_files(self._env)
 
     async def assert_agent_write_allowed(self, path: str) -> None:
         normalized = self._workspace_path(path)
