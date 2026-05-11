@@ -231,3 +231,71 @@ async def test_accept_inbound_does_not_defer_on_drop(
     outcome = await runtime.accept_inbound(_inbound(to="who@example.com"))
     assert isinstance(outcome, Dropped)
     assert deferred == []
+
+
+async def test_accept_inbound_strips_footer_marker_before_persistence(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """The marker we put in our own outbound footer must NOT come back into
+    the agent's input when the user replies. Strip happens at the runtime
+    seam so every adapter (Mailgun, eml, future) gets it for free.
+    """
+    from email_agent.domain.run_footer import FOOTER_MARKER
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    runtime = AssistantRuntime(sqlite_session_factory, attachments_root=tmp_path)
+    body_with_footer = (
+        f"Thanks!\n\n{FOOTER_MARKER}\nRun: r-old\nTokens: in=1 out=1\nCost: $0.0001\n"
+    )
+    inbound = _inbound().model_copy(update={"body_text": body_with_footer})
+    outcome = await runtime.accept_inbound(inbound)
+    assert isinstance(outcome, Accepted)
+
+    async with sqlite_session_factory() as session:
+        message = (await session.execute(select(EmailMessage))).scalar_one()
+    assert FOOTER_MARKER not in message.body_text
+    assert message.body_text.startswith("Thanks!")
+
+
+async def test_accept_inbound_strips_quoted_footer_marker(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    from email_agent.domain.run_footer import FOOTER_MARKER
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    runtime = AssistantRuntime(sqlite_session_factory, attachments_root=tmp_path)
+    body = f"Reply!\n\n> Try chicken thighs.\n> {FOOTER_MARKER}\n> Run: r-old\n"
+    inbound = _inbound().model_copy(update={"body_text": body})
+    outcome = await runtime.accept_inbound(inbound)
+    assert isinstance(outcome, Accepted)
+
+    async with sqlite_session_factory() as session:
+        message = (await session.execute(select(EmailMessage))).scalar_one()
+    assert FOOTER_MARKER not in message.body_text
+    # Content above the quoted marker (including the user's quote of our
+    # previous reply text) is preserved.
+    assert "Try chicken thighs." in message.body_text
+
+
+async def test_accept_inbound_preserves_body_without_footer_marker(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    runtime = AssistantRuntime(sqlite_session_factory, attachments_root=tmp_path)
+    body = "Just a regular reply.\n"
+    inbound = _inbound().model_copy(update={"body_text": body})
+    outcome = await runtime.accept_inbound(inbound)
+    assert isinstance(outcome, Accepted)
+
+    async with sqlite_session_factory() as session:
+        message = (await session.execute(select(EmailMessage))).scalar_one()
+    assert message.body_text == body
