@@ -1,74 +1,86 @@
 {% extends "base.html" %}
 {% block title %}run {{ run.id }} — email-assistant admin{% endblock %}
 {% block content %}
-<h2>Run <code>{{ run.id }}</code></h2>
-<p class="kv">
-  assistant <code>{{ run.assistant_id }}</code> ·
-  thread <code>{{ run.thread_id }}</code> ·
-  <span class="status status-{{ run.status }}">{{ run.status }}</span> ·
-  started {{ run.started_at }} ·
-  completed {{ run.completed_at or "—" }}
-  {% if run.error %}
-  · <span class="status status-failed">error: {{ run.error }}</span>
-  {% endif %}
-  · <a href="/admin/runs/{{ run.id }}.json">json</a>
-</p>
+<h2>Run</h2>
 
-<section class="trace-section">
+<div class="run-meta">
+  <div class="row"><span class="label">ID</span><span class="value"><code>{{ run.id }}</code></span></div>
+  <div class="row"><span class="label">Status</span><span class="value"><span class="status status-{{ run.status }}">{{ run.status }}</span></span></div>
+  <div class="row"><span class="label">Assistant</span><span class="value"><code>{{ run.assistant_id }}</code></span></div>
+  <div class="row"><span class="label">Thread</span><span class="value"><code>{{ run.thread_id }}</code></span></div>
+  <div class="row"><span class="label">Started</span><span class="value">{{ run.started_at or "—" }}</span></div>
+  <div class="row"><span class="label">Completed</span><span class="value">{{ run.completed_at or "—" }}</span></div>
+  {% if run.error %}
+  <div class="row"><span class="label">Error</span><span class="value"><span class="status status-failed">{{ run.error }}</span></span></div>
+  {% endif %}
+  <div class="row"><span class="label">Raw</span><span class="value"><a href="/admin/runs/{{ run.id }}.json">json</a></span></div>
+</div>
+
+<section class="section">
   <h3>Inbound</h3>
   {% if inbound %}
-    <p class="kv">
-      from {{ inbound.from_email }} → {{ inbound.to_emails | join(", ") }}<br>
-      subject: {{ inbound.subject }}
-    </p>
+    <dl class="kv-grid">
+      <div><dt>From</dt><dd>{{ inbound.from_email }}</dd></div>
+      <div><dt>To</dt><dd>{{ inbound.to_emails | join(", ") }}</dd></div>
+      <div><dt>Subject</dt><dd>{{ inbound.subject }}</dd></div>
+    </dl>
     <pre class="body">{{ inbound.body_text }}</pre>
   {% else %}
-    <p class="kv">— no inbound message —</p>
+    <p class="muted">No inbound message.</p>
   {% endif %}
 </section>
 
-<section class="trace-section">
-  <h3>Recalled memory ({{ memory_recalls | length }})</h3>
+<section class="section">
+  <h3>Recalled memory <span class="count">{{ memory_recalls | length }}</span></h3>
   {% for m in memory_recalls %}
     <pre class="body">{{ m.content }}</pre>
   {% else %}
-    <p class="kv">— no recalled memory —</p>
+    <p class="muted">No recalled memory.</p>
   {% endfor %}
 </section>
 
-<section class="trace-section">
-  <h3>Steps ({{ steps | length }})</h3>
+<section class="section">
+  <h3>Steps <span class="count">{{ steps | length }}</span></h3>
   {% for s in steps %}
-    <p class="kv"><strong>{{ s.kind }}</strong> · ${{ "%.4f"|format(s.cost_usd) }}</p>
-    <pre class="body">in:  {{ s.input_summary }}
+    <div class="step">
+      <div class="step-head">
+        <span>{{ s.kind }}</span>
+        <span class="step-cost">${{ "%.4f"|format(s.cost_usd) }}</span>
+      </div>
+      <pre class="body">in:  {{ s.input_summary }}
 out: {{ s.output_summary }}</pre>
+    </div>
   {% else %}
-    <p class="kv">— no steps recorded —</p>
+    <p class="muted">No steps recorded.</p>
   {% endfor %}
 </section>
 
-<section class="trace-section">
+<section class="section">
   <h3>Outbound reply</h3>
   {% if outbound %}
-    <p class="kv">
-      from {{ outbound.from_email }} → {{ outbound.to_emails | join(", ") }}<br>
-      subject: {{ outbound.subject }}<br>
-      message-id: <code>{{ outbound.message_id_header }}</code><br>
-      in-reply-to: <code>{{ outbound.in_reply_to_header }}</code>
-    </p>
+    <dl class="kv-grid">
+      <div><dt>From</dt><dd>{{ outbound.from_email }}</dd></div>
+      <div><dt>To</dt><dd>{{ outbound.to_emails | join(", ") }}</dd></div>
+      <div><dt>Subject</dt><dd>{{ outbound.subject }}</dd></div>
+      <div><dt>Message-ID</dt><dd><code>{{ outbound.message_id_header }}</code></dd></div>
+      <div><dt>In-Reply-To</dt><dd><code>{{ outbound.in_reply_to_header }}</code></dd></div>
+    </dl>
     <pre class="body">{{ outbound.body_text }}</pre>
   {% else %}
-    <p class="kv">— no outbound (run did not complete) —</p>
+    <p class="muted">No outbound — run did not complete.</p>
   {% endif %}
 </section>
 
 {% if usage %}
-<section class="trace-section">
+<section class="section">
   <h3>Usage</h3>
-  <p class="kv">
-    {{ usage.provider }} / <code>{{ usage.model }}</code> ·
-    input {{ usage.input_tokens }} · output {{ usage.output_tokens }} · ${{ "%.4f"|format(usage.cost_usd) }}
-  </p>
+  <dl class="kv-grid">
+    <div><dt>Provider</dt><dd>{{ usage.provider }}</dd></div>
+    <div><dt>Model</dt><dd><code>{{ usage.model }}</code></dd></div>
+    <div><dt>Input tokens</dt><dd>{{ usage.input_tokens }}</dd></div>
+    <div><dt>Output tokens</dt><dd>{{ usage.output_tokens }}</dd></div>
+    <div><dt>Cost</dt><dd>${{ "%.4f"|format(usage.cost_usd) }}</dd></div>
+  </dl>
 </section>
 {% endif %}
 {% endblock %}

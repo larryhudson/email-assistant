@@ -2,8 +2,9 @@
 {% block title %}runs — email-assistant admin{% endblock %}
 {% block content %}
 <h2>Runs</h2>
+
 <form method="get" class="filters">
-  <label>assistant
+  <label>Assistant
     <select name="assistant_id">
       <option value="">— all —</option>
       {% for a in assistant_filter_options %}
@@ -11,7 +12,7 @@
       {% endfor %}
     </select>
   </label>
-  <label>status
+  <label>Status
     <select name="status">
       <option value="">— all —</option>
       {% for s in ["queued", "completed", "failed", "budget_limited"] %}
@@ -19,33 +20,29 @@
       {% endfor %}
     </select>
   </label>
-  <button type="submit">filter</button>
+  <button type="submit">Filter</button>
 </form>
 
-<table class="data">
-  <thead>
-    <tr>
-      <th>started</th>
-      <th>assistant</th>
-      <th>thread</th>
-      <th>status</th>
-      <th>cost</th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for r in runs %}
-    <tr>
-      <td>{{ r.started_at }}</td>
-      <td><code>{{ r.assistant_id }}</code></td>
-      <td><code>{{ r.thread_id }}</code></td>
-      <td><span class="status status-{{ r.status }}">{{ r.status }}</span></td>
-      <td>${{ "%.4f"|format(r.cost) }}</td>
-      <td><a href="/admin/runs/{{ r.id }}">view</a></td>
-    </tr>
-    {% else %}
-    <tr><td colspan="6" class="empty">No runs match.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+{% if runs %}
+<ul class="card-list">
+  {% for r in runs %}
+  <li class="card">
+    <a class="card-link" href="/admin/runs/{{ r.id }}">
+      <div class="card-head">
+        <h3 class="card-title"><code>{{ r.id }}</code></h3>
+        <span class="status status-{{ r.status }}">{{ r.status }}</span>
+      </div>
+      <p class="card-subtitle">{{ r.started_at or "not started" }}</p>
+      <dl class="kv-grid">
+        <div><dt>Assistant</dt><dd><code>{{ r.assistant_id }}</code></dd></div>
+        <div><dt>Thread</dt><dd><code>{{ r.thread_id }}</code></dd></div>
+        <div><dt>Cost</dt><dd>${{ "%.4f"|format(r.cost) }}</dd></div>
+      </dl>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No runs match.</p>
+{% endif %}
 {% endblock %}
