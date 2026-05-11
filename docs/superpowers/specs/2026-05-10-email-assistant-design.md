@@ -9,7 +9,7 @@ The end user only ever sees email. The admin uses a web UI to inspect runs, thre
 ## Goals
 
 1. Receive inbound emails via Mailgun webhook, route to the correct assistant by inbound address.
-2. Run a PydanticAI agent inside a per-assistant Docker sandbox with `read`/`write`/`edit`/`bash` + `memory_search` + `attach_file` tools.
+2. Run a PydanticAI agent against a per-assistant sandboxed workspace with `read`/`write`/`edit`/`bash` + `memory_search` + `attach_file` tools.
 3. Maintain isolated thread history, durable memory (Cognee), tools, budget, and run logs per assistant.
 4. Send a reply through the email provider adapter, then record the run and trigger background memory curation.
 5. Enforce a monthly budget per assistant; respond with a cheap template reply when exceeded.
@@ -34,7 +34,7 @@ The end user only ever sees email. The admin uses a web UI to inspect runs, thre
 | Memory adapter | Cognee |
 | Email provider | Mailgun (first adapter) |
 | Agent framework | PydanticAI |
-| Default model | DeepSeek V4 Flash via OpenAI-compatible endpoint |
+| Default model | Fireworks-hosted minimax-m2p7 via OpenAI-compatible endpoint |
 | Sandbox | Per-assistant long-lived Docker container, ephemeral processes per run |
 | Network policy | Full internet access from sandbox; mitigated by trusted-sender allowlist + resource limits + per-run wall-clock timeout |
 | First-assistant budget | $10/month, alert at 70% |
@@ -67,11 +67,13 @@ run_agent(run_id):
       ├─ BudgetLimitReply → send template via EmailProvider, mark run "budget_limited", done
       └─ Allow → continue
   → EmailWorkspaceProjector.project(thread, scope)
-  → AssistantSandbox.ensure_started(assistant_id)
-  → AssistantSandbox.project_attachments(...)
+  → WorkspaceProvider.get_workspace(assistant_id)
+  → AssistantWorkspace.project_emails(...)
   → MemoryPort.recall(assistant_id, thread_id, query)
-  → AssistantAgent.run(scope, current_message_path, memory_context, deps)
-  → read pending attachment bytes out of sandbox
+  → RunContextAssembler.build(current_message_path, memory_context)
+  → AgentToolset(env, workspace, memory, pending_attachments)
+  → AssistantAgent.run(scope, prompt, deps)
+  → read pending attachment bytes out of workspace
   → ReplyEnvelopeBuilder.build(inbound, thread, body, attachments)
   → EmailProvider.send_reply(envelope)
   → RunRecorder.record_completion(run_id, outbound, steps, usage)
@@ -131,26 +133,47 @@ class MemoryPort(Protocol):
 Invariant: every operation receives `assistant_id`. Adapters must enforce scope isolation and never return memory from another assistant.
 
 Adapters:
-- `CogneeMemoryAdapter` (real) — uses `cognee.remember`, `cognee.search`, `@cognee.agent_memory(session_id=thread_id, save_session_traces=True)` for auto-curation. Per-assistant isolation: separate `data_root_directory` and `system_root_directory` rooted at `data/cognee/<assistant_id>/`. Cognee config is module-global, so the adapter holds a process-wide `asyncio.Lock` and switches config under the lock around each cognee call. (Per-assistant `queueing_lock` in Procrastinate already serializes `run_agent` jobs per assistant, but `curate_memory` jobs and admin reads can race; the global lock makes that safe.)
+- `CogneeMemoryAdapter` (real) — uses `cognee.remember`, `cognee.search`, `@cognee.agent_memory(session_id=thread_id, save_session_traces=True)` for auto-curation. Per-assistant isolation: separate `data_root_directory` and `system_root_directory` rooted at `data/cognee/<assistant_id>/`. Cognee config is module-global, so the adapter holds a process-wide `asyncio.Lock` and switches config under the lock around each cognee call. (Per-assistant Procrastinate `lock` already serializes `run_agent` jobs per assistant, but `curate_memory` jobs and admin reads can race; the global lock makes that safe.)
 - `InMemoryMemoryAdapter` (tests) — dict keyed by `(assistant_id, thread_id)`.
 
-#### `AssistantSandbox`
+#### Workspace / Sandbox Environment
 
 ```python
-class AssistantSandbox(Protocol):
-    async def ensure_started(self, assistant_id: str) -> None: ...
-    async def project_emails(self, assistant_id: str, files: list[ProjectedFile]) -> None: ...
-    async def project_attachments(self, assistant_id: str, run_id: str, files: list[ProjectedFile]) -> None: ...
-    async def run_tool(self, assistant_id: str, run_id: str, call: ToolCall) -> ToolResult: ...
-    async def read_attachment_out(self, assistant_id: str, run_id: str, path: str) -> bytes: ...
-    async def reset(self, assistant_id: str) -> None: ...
+class SandboxEnvironment(Protocol):
+    async def exec(command, *, cwd=None, timeout_s=None) -> ShellResult: ...
+    async def read_text(path: str) -> str: ...
+    async def read_bytes(path: str) -> bytes: ...
+    async def write_text(path: str, content: str) -> None: ...
+    async def write_bytes(path: str, content: bytes) -> None: ...
+    async def stat(path: str) -> FileStat: ...
+    async def readdir(path: str) -> list[str]: ...
+    async def exists(path: str) -> bool: ...
+    async def mkdir(path: str, *, parents: bool = False) -> None: ...
+    async def rm(path: str, *, recursive: bool = False, force: bool = False) -> None: ...
+
+
+class WorkspaceProvider(Protocol):
+    async def get_workspace(self, assistant_id: str) -> AssistantWorkspace: ...
 ```
 
-`ToolCall` covers `read`, `write`, `edit`, `bash`, `attach_file`. `memory_search` is **not** routed through the sandbox — it's served by the runtime against `MemoryPort` so memory bytes never enter the container.
+`SandboxEnvironment` is generic filesystem + shell. `AssistantWorkspace` is the
+email-specific policy layer above it: project email thread files under
+`/workspace/emails`, read generated attachment bytes, and reject model writes
+under `/workspace/emails`.
+
+`AgentToolset` owns the model-visible tools (`read`, `write`, `edit`, `bash`,
+`memory_search`, `attach_file`) and delegates filesystem/shell work to
+`AssistantWorkspace` / `SandboxEnvironment`. `memory_search` calls `MemoryPort`
+directly so memory bytes never enter the container.
 
 Adapters:
-- `DockerSandbox` (real) — long-lived container per assistant, started lazily, stopped after 30 min idle, filesystem persists. Volume mount for `/workspace`. Resource limits: 1 CPU, 512 MB RAM, 2 GB disk quota. Per-tool-call wall-clock timeout (e.g. 60s for bash). Per-run wall-clock budget (e.g. 5 min total).
-- `InMemorySandbox` (tests) — temp directory + direct subprocess, no docker.
+- `DockerWorkspaceProvider` + `DockerEnvironmentAdapter` (real) — long-lived
+  container per assistant, started lazily, filesystem persists. Volume mount
+  for `/workspace`. Resource limits: 1 CPU, 512 MB RAM, 2 GB disk quota.
+  Per-shell-call wall-clock timeout (e.g. 60s for bash). Per-run wall-clock
+  budget (e.g. 5 min total).
+- `InMemoryWorkspaceProvider` + `InMemoryEnvironment` (tests) — in-process
+  filesystem plus direct subprocess for shell calls, no docker.
 
 Base image: `python:3.13-slim` plus `curl`, `git`, `ripgrep`, `jq`, `poppler-utils`. Agent can `apt install` more.
 
@@ -210,12 +233,11 @@ class AgentDeps:
     assistant_id: str
     run_id: str
     thread_id: str
-    sandbox: AssistantSandbox
-    memory: MemoryPort
+    toolset: AgentToolset
     pending_attachments: list[PendingAttachment]   # mutated by attach_file tool
 
 agent = Agent(
-    model=model_for(assistant.model),    # DeepSeek via OpenAI-compatible wrapper
+    model=model_for(assistant.model),    # Fireworks via OpenAI-compatible wrapper
     deps_type=AgentDeps,
     output_type=str,                      # the reply body
     instructions=assistant.system_prompt,
@@ -240,15 +262,19 @@ async def memory_search(ctx: RunContext[AgentDeps], query: str) -> list[Memory]:
 async def attach_file(ctx: RunContext[AgentDeps], path: str, filename: str | None = None) -> None: ...
 ```
 
-The first four route through `ctx.deps.sandbox`; `memory_search` calls `ctx.deps.memory.search(ctx.deps.assistant_id, query)`; `attach_file` appends to `ctx.deps.pending_attachments`. The runtime reads attachment bytes out of the sandbox after `agent.run()` returns.
+The PydanticAI tool callbacks are thin wrappers over `ctx.deps.toolset`. The
+runtime reads attachment bytes out of `AssistantWorkspace` after `agent.run()`
+returns.
 
 Each inbound email is a single `agent.run(prompt, deps=...)`. PydanticAI handles the internal tool-call loop automatically. No cross-email `message_history` — the workspace's email files are the conversation record.
 
-The prompt passed to `agent.run` includes: the path to the current message file inside `/workspace`, recent memory recall, and run constraints (max steps, timeout).
+`RunContextAssembler` builds the prompt passed to `agent.run`. It includes the
+path to the current message file inside `/workspace`, recent memory recall, and
+run constraints (max steps, timeout).
 
 Output: `AgentReply(body=result.output, attachments=deps.pending_attachments)`.
 
-**Model support:** PydanticAI lists DeepSeek as an OpenAI-compatible provider, configured via the OpenAI provider class with a custom `base_url` and API key. The `model_for(name)` helper hides this; assistants reference models by short name (e.g. `"deepseek-flash"`).
+**Model support:** production uses Fireworks through PydanticAI's OpenAI-compatible model wrapper. The model factory receives the full model id from `AssistantScope.model_name` (for example `accounts/fireworks/models/minimax-m2p7`).
 
 #### `ReplyEnvelopeBuilder`
 
@@ -333,10 +359,10 @@ Per-assistant on-disk artefacts (host filesystem, not Postgres):
 
 | Tool | Implementation |
 | --- | --- |
-| `read(path)` | Routed to sandbox; reads file inside container |
-| `write(path, content)` | Routed to sandbox; rejects writes under `/workspace/emails/` |
-| `edit(path, old, new)` | Routed to sandbox; same restriction |
-| `bash(command)` | Routed to sandbox; per-call timeout |
+| `read(path)` | `AgentToolset` reads from `AssistantWorkspace` |
+| `write(path, content)` | `AgentToolset` writes through `AssistantWorkspace`; rejects writes under `/workspace/emails/` |
+| `edit(path, old, new)` | `AgentToolset` edits through `AssistantWorkspace`; same restriction |
+| `bash(command)` | `AgentToolset` runs through `SandboxEnvironment.exec`; per-call timeout |
 | `memory_search(query)` | `MemoryPort.search(assistant_id, query)` — does not enter the container |
 | `attach_file(path, filename?)` | Records pending attachment; runtime reads bytes out post-run |
 
@@ -430,17 +456,17 @@ Priority tests:
 - `ReplyEnvelopeBuilder` preserves `In-Reply-To` and `References`.
 - `RunRecorder` is idempotent for duplicate provider webhook delivery.
 - `MemoryPort` never returns memory from another assistant (enforced by both adapters).
-- `AssistantSandbox` rejects writes/edits under `/workspace/emails/`.
+- `AssistantWorkspace` / `AgentToolset` reject writes/edits under `/workspace/emails/`.
 - `AssistantRuntime.accept_inbound` enqueues exactly one `run_agent` job per unique `(assistant_id, provider_message_id)` pair, even with duplicate webhook delivery.
-- `AssistantRuntime.execute_run` end-to-end test using `InMemoryEmailProvider`, `InMemoryMemoryAdapter`, `InMemorySandbox`, fake LLM — confirms the full pipeline produces a recorded run, sent reply, and curation job for any queued inbound.
+- `AssistantRuntime.execute_run` end-to-end test using `InMemoryEmailProvider`, `InMemoryMemoryAdapter`, `InMemoryWorkspaceProvider` / `InMemoryEnvironment`, fake LLM — confirms the full pipeline produces a recorded run, sent reply, and curation job for any queued inbound.
 
 ## Implementation slices
 
 1. **Core data + ports** — normalized email models, port protocols, Postgres schema (Alembic), in-memory adapters.
 2. **Mailgun inbound + threading** — webhook verification, parser, `AssistantRouter`, `ThreadResolver`, `message_index`. Stop at storing the inbound message; no agent yet.
 3. **Budget + template replies** — `BudgetGovernor`, `usage_ledger`, budget-limit template reply via `MailgunEmailProvider.send_reply`.
-4. **Sandbox** — `DockerSandbox`, `EmailWorkspaceProjector`, tool dispatcher.
-5. **PydanticAI agent runtime** — `AssistantAgent`, `AssistantRuntime`, `ReplyEnvelopeBuilder`, `RunRecorder`. End-to-end with no memory recall (placeholder MemoryContext).
+4. **Workspace + sandbox environment** — `SandboxEnvironment`, `AssistantWorkspace`, `WorkspaceProvider`, `DockerWorkspaceProvider`, `EmailWorkspaceProjector`.
+5. **PydanticAI agent runtime** — `AssistantAgent`, `AgentToolset`, `RunContextAssembler`, `AssistantRuntime`, `ReplyEnvelopeBuilder`, `RunRecorder`. End-to-end with no memory recall (placeholder MemoryContext).
 6. **Cognee memory adapter** — `CogneeMemoryAdapter` implementing recall + per-thread session memory + auto-curation.
 7. **Procrastinate background jobs** — `curate_memory` job, threshold notifications.
 8. **Admin UI** — assistants, runs, threads, memory, budget, sandbox views.
@@ -452,13 +478,10 @@ Priority tests:
 ```
 email-assistant/
   src/email_assistant/
-    models/                 # NormalizedInboundEmail, AgentReply, AssistantScope, ToolCall, ...
-    ports/                  # EmailProvider, MemoryPort, AssistantSandbox protocols
-    adapters/
-      mailgun/              # MailgunEmailProvider
-      cognee/               # CogneeMemoryAdapter
-      docker_sandbox/       # DockerSandbox
-      inmemory/             # in-memory adapters for tests
+    models/                 # NormalizedInboundEmail, AgentReply, AssistantScope, ...
+    mail/                   # EmailProvider + Mailgun/in-memory adapters
+    memory/                 # MemoryPort + Cognee/in-memory adapters
+    sandbox/                # SandboxEnvironment, AssistantWorkspace, providers/adapters
     domain/
       router.py             # AssistantRouter
       budget_governor.py    # BudgetGovernor
@@ -466,7 +489,7 @@ email-assistant/
       workspace_projector.py
       reply_envelope.py
       run_recorder.py
-    agent/                  # AssistantAgent (PydanticAI wrapper) + tool fns
+    agent/                  # AssistantAgent, AgentToolset, RunContextAssembler
     runtime/                # AssistantRuntime
     jobs/                   # Procrastinate job definitions
     web/
@@ -506,8 +529,8 @@ class Settings(BaseSettings):
     mailgun_domain: str
     mailgun_webhook_url: HttpUrl
 
-    deepseek_api_key: SecretStr
-    deepseek_base_url: HttpUrl = "https://api.deepseek.com/v1"
+    fireworks_api_key: SecretStr
+    fireworks_model_id: str = "accounts/fireworks/models/minimax-m2p7"
 
     cognee_llm_api_key: SecretStr
     cognee_embedding_api_key: SecretStr
@@ -531,15 +554,15 @@ class Settings(BaseSettings):
 
 ### Concurrency
 
-Per-assistant serialization for `run_agent` jobs via Procrastinate `queueing_lock=f"assistant-{assistant_id}"`. Procrastinate queues additional jobs and runs them sequentially when the lock is held.
+Per-assistant serialization for `run_agent` jobs via Procrastinate `lock=f"assistant-{assistant_id}"`. Procrastinate queues additional jobs and runs them sequentially when the lock is held.
 
 `curate_memory` jobs do **not** take the assistant lock — they only touch Cognee, which is already serialized by the adapter's global lock. Admin reads also go through the adapter's lock.
 
 ### Sandbox control plane
 
-Worker container mounts `/var/run/docker.sock`. Worker uses the Python `docker` SDK to start, stop, and `exec` per-assistant containers. Bind-mount sources passed to the docker daemon are **host paths**, so `Settings.sandbox_data_root` (and similar) must be host paths. The docker-compose file mounts `./data` to the same absolute path inside the worker so the path resolves identically on both sides.
+Worker container mounts `/var/run/docker.sock`. `DockerWorkspaceProvider` uses the Python `docker` SDK to start and reuse per-assistant containers; `DockerEnvironmentAdapter` performs filesystem and shell operations inside them. Bind-mount sources passed to the docker daemon are **host paths**, so `Settings.sandbox_data_root` (and similar) must be host paths. The docker-compose file mounts `./data` to the same absolute path inside the worker so the path resolves identically on both sides.
 
-Trade-off: docker-socket access is effectively host-root. Acceptable for a single-operator self-hosted MVP. The `InMemorySandbox` adapter avoids docker entirely for tests.
+Trade-off: docker-socket access is effectively host-root. Acceptable for a single-operator self-hosted MVP. The `InMemoryEnvironment` / `InMemoryWorkspaceProvider` path avoids docker entirely for tests.
 
 ### Local dev
 
