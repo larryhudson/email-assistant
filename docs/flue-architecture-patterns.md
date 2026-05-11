@@ -9,6 +9,24 @@ and reply envelopes.
 The useful exercise is not "copy Flue features". It is to look for architectural
 patterns that make the system deeper, cleaner, and easier to change.
 
+## Current Implementation Status
+
+The near-term spine has now been implemented in the runtime path:
+
+- `RunContextAssembler` owns prompt construction.
+- `SandboxEnvironment` is the generic filesystem/shell interface.
+- `AssistantWorkspace` owns email workspace staging, output reads, and
+  `/workspace/emails` write policy.
+- `WorkspaceProvider` resolves one workspace per assistant.
+- `AgentToolset` owns model-visible tools.
+- `DockerWorkspaceProvider` and `DockerEnvironmentAdapter` provide the Docker
+  implementation behind the same workspace/environment interfaces.
+
+`AssistantSandbox`, `DockerSandbox`, `InMemorySandbox`, `ToolCall`, and
+`ToolResult` still exist as older code paths and historical test surfaces, but
+they are no longer the agent runtime path. New runtime work should build on the
+spine above rather than extending the old `run_tool` API.
+
 ## 1. Split Generic Sandbox Environment From Email Workspace
 
 ### Before
@@ -85,8 +103,8 @@ Likely touched areas:
 - `src/email_agent/agent/assistant_agent.py`
 - sandbox unit and integration tests
 
-This can be staged by first adding the lower interface behind the existing
-`AssistantSandbox`, then gradually moving projection and tool logic upward.
+This was implemented by adding the lower interface and moving new runtime work
+onto `WorkspaceProvider` / `AssistantWorkspace` / `AgentToolset`.
 
 ## 2. Separate Runtime Workspace Operations From Model-Visible Tools
 
@@ -146,8 +164,8 @@ Likely touched areas:
 - `src/email_agent/domain/run_recorder.py`
 - run-step tests and admin trace tests
 
-This can be introduced without changing behavior by wrapping the existing
-`run_tool` calls first.
+This was introduced by moving PydanticAI callbacks to `AgentToolset`; new agent
+tool behavior should not extend the old `run_tool` path.
 
 ## 3. Introduce A Run Session Module
 

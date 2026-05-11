@@ -27,14 +27,17 @@ model-visible tools.
   output extraction.
 - `AgentToolset` owns model-visible tool behavior and delegates to
   `AssistantWorkspace`.
-- Existing `AssistantSandbox` behavior is preserved until the new spine is
-  complete enough to replace it.
+- `WorkspaceProvider` resolves the assistant-scoped workspace at run time.
+- `DockerWorkspaceProvider` supplies Docker-backed workspaces through
+  `DockerEnvironmentAdapter`.
+- `AssistantSandbox` / `run_tool` are legacy surfaces, not the runtime path.
 
 ## Ground Rules
 
 - Red-green-refactor, one behavior at a time.
-- Keep public behavior stable until a task explicitly changes a contract.
-- Prefer adapter shims over big-bang rewrites.
+- Keep public behavior stable where useful, but do not preserve old
+  architecture paths just for compatibility.
+- Prefer clean slices over compatibility shims.
 - Add tests at the new boundary before moving production code behind it.
 - Keep Docker integration tests marked `integration` / `requires_docker`.
 - Do not combine architectural extraction with unrelated feature work.
@@ -141,8 +144,8 @@ Expected touched files:
 ## Phase 2: Introduce `SandboxEnvironment`
 
 **Purpose:** Add a generic filesystem/shell boundary below the current
-email-shaped sandbox API. Preserve `AssistantSandbox` while the lower layer
-stabilizes.
+email-shaped sandbox API. New runtime work should use this lower layer rather
+than adding behavior to `AssistantSandbox.run_tool`.
 
 ### Target Shape
 
@@ -320,11 +323,10 @@ Assert:
 
 Implement path normalization and `WorkspacePolicyError`.
 
-#### 3.7 Refactor: Reuse From Current `InMemorySandbox`
+#### 3.7 Refactor: Route New Runtime Code Through `AssistantWorkspace`
 
-Modify `InMemorySandbox` internally to delegate projection and policy checks to
-`AssistantWorkspace` where practical, while preserving the `AssistantSandbox`
-public API.
+Route runtime staging/extraction through `AssistantWorkspace`. `InMemorySandbox`
+can remain only as a legacy test surface until deleted.
 
 Verification:
 
@@ -375,7 +377,7 @@ class AgentToolset:
     async def memory_search(self, query: str) -> list[Memory]: ...
 ```
 
-Keep first behavior compatible with existing tool outputs. Optional improvements
+Keep first behavior stable enough for the model to use. Optional improvements
 like read pagination, `grep`, and `glob` should wait until this extraction is
 done.
 
@@ -394,12 +396,10 @@ Implement only enough for the test.
 
 #### 4.3 Red: Write Rejects Emails Directory
 
-Assert `toolset.write("emails/x.md", "x")` returns the same error-style string
-or raises/normalizes consistently with existing tool behavior.
+Assert `toolset.write("emails/x.md", "x")` returns model-readable error text.
 
-Decision: for compatibility with current `AssistantAgent`, `AgentToolset`
-methods should return strings suitable for the model, not raise for expected
-tool failures.
+Decision: `AgentToolset` methods should return strings suitable for the model,
+not raise for expected tool failures.
 
 #### 4.4 Green: Implement `write`
 
@@ -467,16 +467,14 @@ Expected touched files:
 
 ## Phase 5: Split Docker Provider Mechanics Into `DockerEnvironmentAdapter`
 
-**Purpose:** Make Docker one implementation of `SandboxEnvironment`, then keep
-`DockerSandbox` as a compatibility adapter until the old `AssistantSandbox`
-surface can be retired.
+**Purpose:** Make Docker one implementation of `SandboxEnvironment` and expose
+it through a `WorkspaceProvider`.
 
 ### Target Shape
 
 Create or reshape:
 
 - `src/email_agent/sandbox/docker_environment.py`
-- keep `src/email_agent/sandbox/docker.py` as a compatibility wrapper
 
 Sketch:
 
@@ -491,13 +489,12 @@ class DockerEnvironmentAdapter(SandboxEnvironment):
     ...
 
 
-class DockerSandbox:
-    async def ensure_started(self, assistant_id: str) -> None: ...
-    def environment_for(self, assistant_id: str) -> SandboxEnvironment: ...
+class DockerWorkspaceProvider:
+    async def get_workspace(self, assistant_id: str) -> AssistantWorkspace: ...
 ```
 
-`DockerSandbox.run_tool(...)` can become a compatibility shim that builds an
-`AssistantWorkspace` + `AgentToolset` over `environment_for(assistant_id)`.
+`DockerWorkspaceProvider` owns assistant-scoped container creation/reuse and
+returns `AssistantWorkspace(DockerEnvironmentAdapter(...))`.
 
 ### TDD Cycles
 
@@ -539,16 +536,13 @@ Tests:
 - `stat`
 - `rm(..., recursive=True, force=True)`
 
-#### 5.6 Refactor: `DockerSandbox` Delegates To Environment + Workspace
+#### 5.6 Refactor: Composition Uses `DockerWorkspaceProvider`
 
-Keep all existing `tests/integration/test_docker_sandbox.py` passing while
-internally delegating to the new adapter.
+Production composition should pass a `WorkspaceProvider` into
+`AssistantRuntime`, not an `AssistantSandbox`.
 
-Verification:
-
-```bash
-uv run pytest tests/integration/test_docker_sandbox.py -q
-```
+Verification should cover the new Docker environment/provider path. The old
+`test_docker_sandbox.py` suite is useful only while legacy DockerSandbox exists.
 
 Expected touched files:
 
@@ -561,9 +555,7 @@ Expected touched files:
 
 ## Phase 6: Collapse Runtime Onto The New Spine
 
-**Purpose:** Make the normal execution path use the new boundaries directly,
-while preserving `AssistantSandbox` as an adapter only if still useful for
-tests or compatibility.
+**Purpose:** Make the normal execution path use the new boundaries directly.
 
 ### Target Shape
 
@@ -571,8 +563,7 @@ tests or compatibility.
 
 ```python
 projection = projector.project(...)
-env = await sandbox_manager.environment_for(scope.assistant_id)
-workspace = AssistantWorkspace(env)
+workspace = await workspace_provider.get_workspace(scope.assistant_id)
 await workspace.project_emails(projected_files)
 
 prompt_context = context_assembler.build(...)
@@ -602,8 +593,9 @@ Expected red: runtime still calls old sandbox projection directly.
 
 #### 6.3 Green: Inject Workspace Factory
 
-Add a small factory dependency to `AssistantRuntime` or composition so tests can
-provide a fake and production can construct from Docker/InMemory environment.
+Add `WorkspaceProvider` to `AssistantRuntime` and composition so tests can
+provide a static workspace and production can construct Docker/InMemory
+workspaces per assistant.
 
 #### 6.4 Red: Agent Uses Toolset From Deps
 
@@ -641,32 +633,14 @@ Expected touched files:
 
 ---
 
-## Phase 7: Retire Or Shrink `AssistantSandbox`
+## Phase 7: Delete Legacy Sandbox Surfaces
 
-**Purpose:** Decide whether the old email-shaped sandbox port still earns its
-keep after the new spine is in place.
+**Purpose:** Remove the old email-shaped sandbox port after the new spine is in
+place.
 
-### Options
-
-#### Option A: Retain As Facade
-
-Keep `AssistantSandbox` as a high-level facade for runtime use, implemented in
-terms of:
-
-- `SandboxEnvironment`
-- `AssistantWorkspace`
-- `AgentToolset`
-
-This is lower risk if many tests and runtime paths still depend on it.
-
-#### Option B: Retire It
-
-Replace runtime dependencies with:
-
-- `SandboxEnvironmentManager`
-- `AssistantWorkspaceFactory`
-
-Then delete `ToolCall`/`ToolResult` once no model-visible tools use that shape.
+Delete `AssistantSandbox`, `DockerSandbox`, `InMemorySandbox`, `ToolCall`, and
+`ToolResult` once no tests or historical adapters depend on them. The runtime
+already depends on `WorkspaceProvider` + `AgentToolset`.
 
 ### TDD Cycles
 
@@ -677,13 +651,11 @@ Add a lightweight import-boundary test or `rg`-based test that asserts
 
 #### 7.2 Green: Remove Runtime Dependency
 
-Move remaining tool-call-specific logic into `AgentToolset` or compatibility
-facades.
+Move remaining tool-call-specific logic into `AgentToolset`.
 
 #### 7.3 Refactor: Delete Or Deprecate Dead Models
 
-If `ToolCall` / `ToolResult` remain only for compatibility, mark them as
-legacy in comments. If no references remain, delete them and update tests.
+Delete `ToolCall` / `ToolResult` once no references remain.
 
 Verification:
 
@@ -725,8 +697,8 @@ The spine is done when:
   model-facing strings, pending attachments, and memory delegation.
 
 - **Risk:** Docker refactor breaks integration behavior.
-  **Mitigation:** Keep existing `DockerSandbox` integration tests as a
-  compatibility safety net while moving internals.
+  **Mitigation:** Add DockerEnvironment/DockerWorkspaceProvider integration
+  coverage and retire old DockerSandbox integration tests.
 
 - **Risk:** Test-only `InMemoryEnvironment.exec` looks production-safe.
   **Mitigation:** Document it clearly as test-only, matching current
@@ -744,5 +716,4 @@ The spine is done when:
 4. `refactor(agent): extract model-visible toolset`
 5. `refactor(sandbox): split docker environment adapter`
 6. `refactor(runtime): route execution through workspace and toolset`
-7. `refactor(sandbox): shrink legacy AssistantSandbox facade`
-
+7. `refactor(sandbox): delete legacy AssistantSandbox surface`
