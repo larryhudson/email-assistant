@@ -41,6 +41,13 @@ _PRICING: dict[str, TokenPrice] = {
         output_usd_per_mtok=Decimal("1.20"),
         cache_read_usd_per_mtok=Decimal("0.06"),
     ),
+    # Kimi K2 — Fireworks: $0.95 input / $4.00 output / $0.16 cache-read
+    # per million tokens.
+    "accounts/fireworks/models/kimi-k2p6": TokenPrice(
+        input_usd_per_mtok=Decimal("0.95"),
+        output_usd_per_mtok=Decimal("4.00"),
+        cache_read_usd_per_mtok=Decimal("0.16"),
+    ),
 }
 
 _DEFAULT = TokenPrice(
