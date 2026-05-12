@@ -70,6 +70,11 @@ async def ensure_starter_files(env: SandboxEnvironment) -> None:
         await env.mkdir(f"{SKILLS_DIR}/managing-context", parents=True)
         await env.write_text(context_skill, _STARTER_SKILL_MANAGING_CONTEXT)
 
+    scheduling_skill = f"{SKILLS_DIR}/scheduling-tasks/SKILL.md"
+    if not await env.exists(scheduling_skill):
+        await env.mkdir(f"{SKILLS_DIR}/scheduling-tasks", parents=True)
+        await env.write_text(scheduling_skill, _STARTER_SKILL_SCHEDULING_TASKS)
+
 
 def render_skills_block(skills: list[Skill]) -> str:
     if not skills:
@@ -203,6 +208,86 @@ How to update:
 2. Use the `edit` tool with a precise `old`/`new` pair, OR `write` to
    replace the whole file if it has drifted.
 3. Prefer terse bullet points over prose. Aim for under ~50 lines.
+"""
+
+
+_STARTER_SKILL_SCHEDULING_TASKS = """---
+name: scheduling-tasks
+description: Schedule a one-off or recurring synthetic inbound to yourself (reminders, daily check-ins, follow-ups).
+---
+
+# Scheduling tasks
+
+When the user asks you to remind them later, follow up after a delay, or do
+something on a recurring schedule, use the dedicated tools — **not** bash or
+the Python API. The tools below operate against the live database with the
+right assistant scope already applied; trying to drive the DB by hand from
+the sandbox will fail (no credentials) and waste turns.
+
+When a scheduled task fires, the runtime delivers a synthetic inbound email
+to *you* with `name` as the subject and `body` as the message body, and you
+get a fresh agent run with full thread/memory context. Write `body` as a
+prompt to your future self ("Send Larry a friendly check-in asking how the
+launch went").
+
+## Tools
+
+- `create_scheduled_task(kind, when, name, body)` — schedule a task.
+  - `kind="once"`, `when` = ISO-8601 timezone-aware datetime, e.g.
+    `"2026-05-12T09:00:00+10:00"`.
+  - `kind="cron"`, `when` = 5-field cron expression, e.g. `"0 9 * * *"`
+    (every day at 09:00 UTC). Cron is always evaluated in UTC — convert
+    the user's local time yourself.
+  - `name` is a short subject-style label. `body` is the prompt your
+    future run will receive.
+- `list_scheduled_tasks()` — list this assistant's active tasks (both
+  ONCE and CRON). Useful before creating to avoid duplicates, and when
+  the user asks "what reminders do I have set?".
+- `delete_scheduled_task(task_id)` — cancel a task by id from
+  `list_scheduled_tasks`.
+
+## Choosing the time
+
+- Check `/workspace/CONTEXT.md` for the user's timezone. If it's recorded,
+  build ISO-8601 datetimes with that offset (e.g. `+10:00` for AEST) so
+  "tomorrow at 9am" means 9am *their* time.
+- If you don't know the user's timezone and the request is time-sensitive,
+  either ask them or write CONTEXT.md once you learn it.
+- "In N minutes/hours/days" → compute from the current run's clock and
+  use `kind="once"` with the resulting absolute datetime.
+
+## Examples
+
+One-off reminder in 30 minutes (user in AEST):
+
+```
+create_scheduled_task(
+    kind="once",
+    when="2026-05-12T20:30:00+10:00",
+    name="Follow up on the Acme proposal",
+    body="Check in with Larry — has he heard back from Acme on the proposal he sent yesterday? If not, suggest a polite nudge.",
+)
+```
+
+Daily 7am check-in (user in AEST → 21:00 UTC the previous day):
+
+```
+create_scheduled_task(
+    kind="cron",
+    when="0 21 * * *",
+    name="Morning check-in",
+    body="Send Larry a short, warm good-morning email asking how he's feeling and what's on his plate today.",
+)
+```
+
+## Etiquette
+
+- Confirm details (when, what to say) with the user before scheduling if
+  they're ambiguous. A wrong reminder is worse than no reminder.
+- After creating, tell the user concisely what you scheduled and when it
+  will fire (in their local time).
+- Don't stack duplicates — `list_scheduled_tasks` first if the user might
+  already have a similar task.
 """
 
 
