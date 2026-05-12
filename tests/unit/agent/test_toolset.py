@@ -94,4 +94,5 @@ async def test_memory_search_delegates_by_assistant_id() -> None:
 
     result = await _toolset(InMemoryEnvironment(), memory=memory).memory_search("short")
 
+    assert isinstance(result, list)
     assert [m.content for m in result] == ["[t-1/assistant] likes short replies"]

@@ -233,12 +233,11 @@ class AssistantRuntime:
         if (
             self._email_provider is None
             or self._workspace_provider is None
-            or self._memory is None
             or self._agent is None
             or self._projector is None
         ):
             raise RuntimeError(
-                "execute_run requires email_provider, workspace_provider, memory, agent, "
+                "execute_run requires email_provider, workspace_provider, agent, "
                 "and projector to be configured"
             )
 
@@ -283,17 +282,23 @@ class AssistantRuntime:
 
         # Pre-call recall once with the inbound body (truncated) as the query.
         # Reliable beats clever — gives the model prior context without it
-        # having to decide to call memory_search first.
-        recall_query = (inbound_email.body_text or "")[:2000]
-        memory_context = await self._memory.recall(
-            assistant_id=scope.assistant_id,
-            thread_id=thread.id,
-            query=recall_query,
-        )
-        await self._persist_memory_recalls(run_id, memory_context.memories)
+        # having to decide to call memory_search first. When the memory
+        # layer is disabled (self._memory is None), skip recall + persist
+        # and feed the assembler an empty memories list.
+        recalled_memories: list[Memory] = []
+        if self._memory is not None:
+            recall_query = (inbound_email.body_text or "")[:2000]
+            memory_context = await self._memory.recall(
+                assistant_id=scope.assistant_id,
+                thread_id=thread.id,
+                query=recall_query,
+            )
+            recalled_memories = list(memory_context.memories)
+            await self._persist_memory_recalls(run_id, recalled_memories)
         prompt_context = self._context_assembler.build(
             current_message_path=projection.current_message_path,
-            memories=memory_context.memories,
+            memories=recalled_memories,
+            memory_enabled=self._memory is not None,
         )
         prompt = prompt_context.prompt
 

@@ -675,6 +675,109 @@ async def test_execute_run_enforces_run_timeout(
         assert "timeout" in run.error.lower() or "timed out" in run.error.lower()
 
 
+async def test_execute_run_with_memory_disabled_skips_recall_and_curate(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """When `memory=None`, the runtime should still complete a run end-to-end:
+    no recall, no RunMemoryRecall rows, no `memory_search` tool registered,
+    no curate_memory defer scheduled.
+    """
+    from email_agent.db.models import RunMemoryRecall
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    email_provider = InMemoryEmailProvider()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    agent = AssistantAgent(has_memory=False)
+
+    captured_tool_names: list[set[str]] = []
+
+    async def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        captured_tool_names.append({t.name for t in info.function_tools})
+        return ModelResponse(parts=[TextPart(content="hello back")])
+
+    runtime = AssistantRuntime(
+        sqlite_session_factory,
+        attachments_root=tmp_path / "attachments",
+        email_provider=email_provider,
+        workspace_provider=StaticWorkspaceProvider(workspace),
+        memory=None,
+        agent=agent,
+        projector=EmailWorkspaceProjector(run_inputs_root=tmp_path / "run_inputs"),
+        # Production wiring (composition.make_runtime_from_settings) passes
+        # curate_memory_defer=None when memory is None — mirror that here.
+        recorder=RunRecorder(sqlite_session_factory, curate_memory_defer=None),
+        budget_governor=BudgetGovernor(sqlite_session_factory),
+        envelope_builder=ReplyEnvelopeBuilder(),
+        message_id_factory=lambda: "<run-abc@x>",
+        provider_message_id_factory=lambda: "prov-out-1",
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    with agent.override_model(_scope(), FunctionModel(fn)):
+        outcome = await runtime.execute_run(run_id)
+
+    assert isinstance(outcome, Completed)
+
+    # No memory_search tool reached the model.
+    assert captured_tool_names, "model was never called"
+    for tools in captured_tool_names:
+        assert "memory_search" not in tools
+
+    # No RunMemoryRecall rows persisted.
+    async with sqlite_session_factory() as session:
+        rows = (await session.execute(select(RunMemoryRecall))).scalars().all()
+        assert rows == []
+
+    # RunRecorder has no curate_memory_defer wired (mirrors production
+    # composition for memory=None) — nothing to schedule, nothing fires.
+    assert runtime._recorder._curate_memory_defer is None
+
+
+async def test_curate_defer_not_scheduled_when_memory_disabled_in_composition(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+    monkeypatch,
+):
+    """composition.make_runtime_from_settings must not pass curate_memory_defer
+    into RunRecorder when memory is None."""
+    from email_agent.composition import make_runtime_from_settings
+    from email_agent.config import Settings
+
+    # Build a minimal Settings via env. database_url, mailgun_*, fireworks_*,
+    # cognee_* are all required SecretStr/str fields — set just enough.
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://x:y@localhost/test")
+    monkeypatch.setenv("MAILGUN_SIGNING_KEY", "x")
+    monkeypatch.setenv("MAILGUN_API_KEY", "x")
+    monkeypatch.setenv("MAILGUN_DOMAIN", "example.com")
+    monkeypatch.setenv("MAILGUN_WEBHOOK_URL", "https://example.com/x")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "x")
+    monkeypatch.setenv("COGNEE_LLM_API_KEY", "x")
+    monkeypatch.setenv("COGNEE_EMBEDDING_API_KEY", "x")
+    monkeypatch.setenv("MEMORY_ENABLED", "false")
+
+    settings = Settings()  # ty: ignore[missing-argument]
+    assert settings.memory_enabled is False
+
+    runtime = make_runtime_from_settings(
+        settings,
+        sqlite_session_factory,
+        email_provider=InMemoryEmailProvider(),
+        workspace_provider=StaticWorkspaceProvider(AssistantWorkspace(InMemoryEnvironment())),
+        use_real_model=False,
+        use_real_memory=False,
+        use_docker_sandbox=False,
+        use_procrastinate=False,
+    )
+    # Memory stays None and the recorder has no curate defer.
+    assert runtime._memory is None
+    assert runtime._recorder._curate_memory_defer is None
+
+
 async def test_execute_run_notifies_on_failure_after_agent_succeeded(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,

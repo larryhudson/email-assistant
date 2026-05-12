@@ -421,6 +421,25 @@ async def test_delete_scheduled_task_tool_routes_through_toolset() -> None:
     assert "deleted scheduled_task st-1" in result.body
 
 
+async def test_memory_search_tool_not_registered_when_memory_disabled() -> None:
+    agent = AssistantAgent(has_memory=False)
+    # Force the lazy-build path so we can introspect the underlying pydantic-ai
+    # Agent's registered tools.
+    built = agent._agent_for(_scope())
+    tool_names = set(built._function_toolset.tools.keys())
+    assert "memory_search" not in tool_names
+    # Other tools are still there.
+    assert "read" in tool_names
+    assert "write" in tool_names
+
+
+async def test_memory_search_tool_registered_by_default() -> None:
+    agent = AssistantAgent()
+    built = agent._agent_for(_scope())
+    tool_names = set(built._function_toolset.tools.keys())
+    assert "memory_search" in tool_names
+
+
 async def test_run_wraps_underlying_exception_with_partial_usage_and_steps() -> None:
     """When the agent crashes after some tool calls, AssistantAgent.run must
     raise AgentRunError carrying the partial usage + step trace so the

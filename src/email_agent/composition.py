@@ -131,8 +131,10 @@ def make_runtime_from_settings(
             )
         else:
             workspace_provider = InMemoryWorkspaceProvider()
-    if memory is None:
+    if memory is None and settings.memory_enabled:
         memory = make_cognee_memory(settings) if use_real_memory else InMemoryMemoryAdapter()
+    # When memory_enabled is False and the caller didn't supply one, `memory`
+    # stays None and the runtime/agent skip recall/curate entirely.
     projector = EmailWorkspaceProjector(run_inputs_root=settings.run_inputs_root)
 
     settings.attachments_root.mkdir(parents=True, exist_ok=True)
@@ -148,7 +150,9 @@ def make_runtime_from_settings(
         from email_agent.jobs.app import defer_curate_memory, defer_run_agent
 
         run_agent_defer = defer_run_agent
-        curate_memory_defer = defer_curate_memory
+        # Nothing to curate into when memory is disabled — skip scheduling
+        # post-run curation entirely so the worker doesn't fire no-ops.
+        curate_memory_defer = defer_curate_memory if memory is not None else None
 
     from email_agent.domain.run_recorder import RunRecorder
 
@@ -160,7 +164,7 @@ def make_runtime_from_settings(
         email_provider=email_provider,
         workspace_provider=workspace_provider,
         memory=memory,
-        agent=AssistantAgent(),
+        agent=AssistantAgent(has_memory=memory is not None),
         projector=projector,
         recorder=recorder,
         model_factory=model_factory,

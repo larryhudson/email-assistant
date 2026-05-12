@@ -94,8 +94,9 @@ def build_worker_deps() -> _WorkerDeps:
     # Build the memory adapter once and share it: the runtime uses it for
     # recall + memory_search inside execute_run; curate_memory uses it for
     # post-run record_turn writes. Both must hit the same per-assistant
-    # cognee root + share the global asyncio.Lock.
-    memory = make_cognee_memory(settings)
+    # cognee root + share the global asyncio.Lock. When memory is
+    # disabled via settings, skip cognee entirely.
+    memory = make_cognee_memory(settings) if settings.memory_enabled else None
 
     email_provider = _build_email_provider(settings)
     runtime = make_runtime_from_settings(
@@ -121,7 +122,7 @@ class _WorkerDeps:
         self,
         *,
         runtime: AssistantRuntime,
-        memory: MemoryPort,
+        memory: MemoryPort | None,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
         self.runtime = runtime
@@ -177,6 +178,10 @@ async def cleanup_procrastinate_jobs(timestamp: int) -> None:
 @app.task(name="curate_memory")
 async def curate_memory(*, assistant_id: str, thread_id: str, run_id: str) -> None:
     deps = build_worker_deps()
+    # Memory layer disabled: this task should normally never be queued (the
+    # runtime skips scheduling it), but stay defensive on stale jobs.
+    if deps.memory is None:
+        return
     await curate_memory_impl(
         assistant_id=assistant_id,
         thread_id=thread_id,

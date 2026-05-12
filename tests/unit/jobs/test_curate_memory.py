@@ -142,6 +142,29 @@ async def test_curate_memory_writes_user_and_assistant_turns(
 
 
 @pytest.mark.asyncio
+async def test_curate_memory_task_noop_when_memory_disabled() -> None:
+    """The procrastinate-registered `curate_memory` task body must early-return
+    when worker deps were built with memory=None (memory layer disabled)."""
+    from email_agent.jobs import app as jobs_app
+
+    class _StubDeps:
+        memory = None  # the only attribute the task body reads before its guard
+
+    # Replace `build_worker_deps` so the task's first line returns our stub.
+    original = jobs_app.build_worker_deps
+    jobs_app.build_worker_deps = lambda: _StubDeps()  # ty: ignore[invalid-assignment]
+    try:
+        # The body is wrapped by procrastinate; call the underlying callable.
+        # @app.task decorates with a wrapper that exposes the original via `.func`.
+        task = jobs_app.curate_memory
+        body = getattr(task, "func", None) or task
+        result = await body(assistant_id="a-1", thread_id="t-1", run_id="r-1")
+        assert result is None
+    finally:
+        jobs_app.build_worker_deps = original  # ty: ignore[invalid-assignment]
+
+
+@pytest.mark.asyncio
 async def test_curate_memory_skips_when_outbound_missing(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

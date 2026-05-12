@@ -18,6 +18,7 @@ class RunContextAssembler:
         *,
         current_message_path: str,
         memories: list[Memory],
+        memory_enabled: bool = True,
     ) -> AgentPromptContext:
         memory_block = ""
         if memories:
@@ -25,13 +26,14 @@ class RunContextAssembler:
                 f"- {memory.content}" for memory in memories
             )
 
+        memory_sentence = "Use `memory_search` to look up prior context. " if memory_enabled else ""
         prompt = (
             f"A new inbound email has arrived. Read it from {current_message_path!r} "
             f"using the `read` tool. Your final response (a plain string returned from this run) "
             f"becomes the body of the reply email — do NOT write the reply to disk, and do NOT "
             f"modify anything under emails/ (that directory is the read-only thread history). "
             f"Use `write`/`edit`/`bash` only if you need scratch files under other paths. "
-            f"Use `memory_search` to look up prior context. Use `attach_file` only if you "
+            f"{memory_sentence}Use `attach_file` only if you "
             f"genuinely need to attach a generated artefact." + memory_block
         )
 

@@ -49,7 +49,7 @@ class AgentToolset:
         run_id: str,
         env: SandboxEnvironment,
         workspace: AssistantWorkspace,
-        memory: _MemoryLike,
+        memory: _MemoryLike | None,
         pending_attachments: list[PendingAttachment],
         scheduled_tasks: _ScheduledTasksLike | None = None,
     ) -> None:
@@ -113,7 +113,11 @@ class AgentToolset:
             return _tool_error("attach_file", str(exc), detail=path)
         return f"attached {path}"
 
-    async def memory_search(self, query: str) -> list[Memory]:
+    async def memory_search(self, query: str) -> list[Memory] | str:
+        # Defensive: the agent should not register `memory_search` when memory
+        # is disabled, so this branch is unreachable in normal wiring.
+        if self._memory is None:
+            return _tool_error("memory_search", "memory layer is disabled")
         return await self._memory.search(self._assistant_id, query)
 
     async def list_scheduled_tasks(self) -> list[ScheduledTask]:

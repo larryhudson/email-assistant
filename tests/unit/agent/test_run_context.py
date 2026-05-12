@@ -19,6 +19,19 @@ def test_run_context_prompt_captures_email_agent_contract() -> None:
     assert context.recalled_memory == []
 
 
+def test_run_context_prompt_omits_memory_search_when_memory_disabled() -> None:
+    context = RunContextAssembler().build(
+        current_message_path="emails/t-1/0001.md",
+        memories=[],
+        memory_enabled=False,
+    )
+
+    assert "memory_search" not in context.prompt
+    # Other guidance is still present.
+    assert "using the `read` tool" in context.prompt
+    assert "Use `attach_file` only if you genuinely need" in context.prompt
+
+
 def test_run_context_prompt_includes_recalled_memory_block() -> None:
     memories = [
         Memory(id="m-1", content="Mum prefers concise replies.", score=0.9),

@@ -29,16 +29,23 @@ from email_agent.sandbox.skills import SYSTEM_PROMPT_GUIDANCE
 class AssistantAgent:
     """Wraps a PydanticAI `Agent` per-assistant, plus the six tools.
 
-    One `Agent` is built lazily per `(model_name, system_prompt)` pair and
-    cached for the process lifetime. Tools are registered at build time;
-    per-run state flows through `RunContext[AgentDeps]`.
+    One `Agent` is built lazily per `(model_name, system_prompt, has_memory)`
+    triple and cached for the process lifetime. Tools are registered at
+    build time; per-run state flows through `RunContext[AgentDeps]`.
+
+    `has_memory` is constructor-level (not per-run) because the runtime
+    composes one `AssistantAgent` for the whole process — flipping memory
+    on/off requires a fresh runtime anyway. Including it in the cache key
+    keeps things consistent if a single process ever holds two
+    differently-configured agents.
     """
 
-    def __init__(self) -> None:
-        self._agents: dict[tuple[str, str], Agent[AgentDeps, str]] = {}
+    def __init__(self, *, has_memory: bool = True) -> None:
+        self._has_memory = has_memory
+        self._agents: dict[tuple[str, str, bool], Agent[AgentDeps, str]] = {}
 
     def _agent_for(self, scope: AssistantScope) -> Agent[AgentDeps, str]:
-        key = (scope.model_name, scope.system_prompt)
+        key = (scope.model_name, scope.system_prompt, self._has_memory)
         cached = self._agents.get(key)
         if cached is not None:
             return cached
@@ -94,10 +101,12 @@ class AssistantAgent:
             """
             return await ctx.deps.toolset.attach_file(path, filename)
 
-        @agent.tool
-        async def memory_search(ctx: RunContext[AgentDeps], query: str) -> list[Memory]:
-            """Search durable memory for the assistant; bypasses the sandbox."""
-            return await ctx.deps.toolset.memory_search(query)
+        if self._has_memory:
+
+            @agent.tool
+            async def memory_search(ctx: RunContext[AgentDeps], query: str) -> list[Memory] | str:
+                """Search durable memory for the assistant; bypasses the sandbox."""
+                return await ctx.deps.toolset.memory_search(query)
 
         @agent.tool
         async def bash(ctx: RunContext[AgentDeps], command: str) -> str:

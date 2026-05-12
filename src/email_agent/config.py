@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # call. Set false to opt back in for a stricter check.
     cognee_skip_connection_test: bool = True
 
+    # Toggle the memory layer wholesale. When False, the runtime, agent,
+    # and worker all skip recall/curate and the `memory_search` tool is
+    # not registered with the agent. Useful for offline iteration without
+    # any cognee deps, or for assistants that don't need durable memory.
+    memory_enabled: bool = True
+
     sandbox_image: str = "email-agent-sandbox:slice4"
     sandbox_data_root: Path = Path("data/sandboxes")
     sandbox_idle_shutdown_minutes: int = 30
