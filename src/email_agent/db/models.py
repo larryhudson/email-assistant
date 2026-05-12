@@ -140,6 +140,7 @@ class EmailMessage(Base):
     references_headers: Mapped[list[str]] = mapped_column(JSON, default=list)
     from_email: Mapped[str] = mapped_column(String(320))
     to_emails: Mapped[list[str]] = mapped_column(JSON, default=list)
+    cc_emails: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     subject: Mapped[str] = mapped_column(String(998))
     body_text: Mapped[str] = mapped_column(Text)
     body_html: Mapped[str | None] = mapped_column(Text, nullable=True)

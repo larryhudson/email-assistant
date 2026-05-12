@@ -40,7 +40,9 @@ def _scope() -> AssistantScope:
     return AssistantScope(
         assistant_id="a-1",
         owner_id="o-1",
+        owner_email="owner@example.com",
         end_user_id="u-1",
+        end_user_email="mum@example.com",
         inbound_address="mum@assistants.example.com",
         status=AssistantStatus.ACTIVE,
         allowed_senders=("mum@example.com",),

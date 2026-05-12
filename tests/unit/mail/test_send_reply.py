@@ -13,6 +13,7 @@ def _envelope(**overrides) -> NormalizedOutboundEmail:
     return NormalizedOutboundEmail(
         from_email=overrides.pop("from_email", "mum@assistants.example.com"),
         to_emails=overrides.pop("to_emails", ["mum@example.com"]),
+        cc_emails=overrides.pop("cc_emails", []),
         subject=overrides.pop("subject", "Re: Question?"),
         body_text=overrides.pop("body_text", "Sorry, the assistant is at its monthly cap."),
         body_html=overrides.pop("body_html", None),
@@ -102,6 +103,40 @@ async def test_send_reply_posts_to_mailgun_messages_endpoint(mock_transport_fact
 
     assert sent.provider_message_id == "<provider-msg-1@mg.example.com>"
     assert sent.message_id_header == "<run-abc@assistants.example.com>"
+
+
+async def test_send_reply_includes_cc_when_present(mock_transport_factory):
+    transport, captured = mock_transport_factory(
+        httpx.Response(200, json={"id": "<x@y>", "message": "Queued"})
+    )
+    provider = MailgunEmailProvider(
+        signing_key="sig",
+        api_key="key-123",
+        domain="mg.example.com",
+        transport=transport,
+    )
+
+    await provider.send_reply(_envelope(cc_emails=["mum@example.com"]))
+
+    fields, _ = _request_fields(captured[0])
+    assert fields["cc"] == ["mum@example.com"]
+
+
+async def test_send_reply_omits_cc_when_empty(mock_transport_factory):
+    transport, captured = mock_transport_factory(
+        httpx.Response(200, json={"id": "<x@y>", "message": "Queued"})
+    )
+    provider = MailgunEmailProvider(
+        signing_key="sig",
+        api_key="key-123",
+        domain="mg.example.com",
+        transport=transport,
+    )
+
+    await provider.send_reply(_envelope())
+
+    fields, _ = _request_fields(captured[0])
+    assert "cc" not in fields
 
 
 async def test_send_reply_omits_threading_headers_when_absent(mock_transport_factory):

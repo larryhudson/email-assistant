@@ -194,11 +194,13 @@ def _message_markdown(message: EmailMessage) -> str:
     references = " ".join(message.references_headers) if message.references_headers else ""
     in_reply_to = message.in_reply_to_header or ""
     to_emails = ", ".join(message.to_emails)
+    cc_emails = ", ".join(message.cc_emails) if message.cc_emails else ""
     return (
         "---\n"
         f"direction: {message.direction}\n"
         f"from: {message.from_email}\n"
         f"to: {to_emails}\n"
+        f"cc: {cc_emails}\n"
         f"date: {message.created_at.isoformat()}\n"
         f"subject: {_quote_yaml(message.subject)}\n"
         f"message_id: {message.message_id_header}\n"

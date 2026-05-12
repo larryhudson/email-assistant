@@ -18,7 +18,9 @@ def test_assistant_scope_carries_owner_chain():
     scope = AssistantScope(
         assistant_id="a-1",
         owner_id="o-1",
+        owner_email="owner@example.com",
         end_user_id="u-1",
+        end_user_email="mum@example.com",
         inbound_address="assistant+mum@example.com",
         status=AssistantStatus.ACTIVE,
         allowed_senders=("mum@example.com",),
@@ -37,7 +39,9 @@ def test_assistant_scope_rejects_mutation():
     scope = AssistantScope(
         assistant_id="a",
         owner_id="o",
+        owner_email="owner@example.com",
         end_user_id="u",
+        end_user_email="mum@example.com",
         inbound_address="x@y",
         status=AssistantStatus.ACTIVE,
         allowed_senders=(),
@@ -95,7 +99,7 @@ def test_assistant_scope_from_rows_flattens_three_rows():
     from email_agent.db.models import Assistant as AssistantRow
     from email_agent.db.models import AssistantScopeRow, EndUser, Owner
 
-    owner = Owner(id="o-1", name="Larry", primary_admin_id=None)
+    owner = Owner(id="o-1", name="Larry", primary_admin_id=None, email="larry@example.com")
     end_user = EndUser(id="u-1", owner_id="o-1", email="mum@example.com")
     assistant = AssistantRow(
         id="a-1",
@@ -122,7 +126,9 @@ def test_assistant_scope_from_rows_flattens_three_rows():
 
     assert scope.assistant_id == "a-1"
     assert scope.owner_id == "o-1"
+    assert scope.owner_email == "larry@example.com"
     assert scope.end_user_id == "u-1"
+    assert scope.end_user_email == "mum@example.com"
     assert scope.inbound_address == "mum@assistants.example.com"
     assert scope.status is AssistantStatus.ACTIVE
     assert scope.allowed_senders == ("mum@example.com",)

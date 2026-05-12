@@ -57,6 +57,7 @@ class ReplyEnvelopeBuilder:
         attachments: list[EmailAttachment],
         message_id_factory: Callable[[], str],
         run_footer: RunFooterContext | None = None,
+        cc_emails: list[str] | None = None,
     ) -> NormalizedOutboundEmail:
         rendered = render_markdown_to_html(body_text)
         final_text = body_text
@@ -75,6 +76,7 @@ class ReplyEnvelopeBuilder:
         return NormalizedOutboundEmail(
             from_email=from_email,
             to_emails=[inbound.from_email],
+            cc_emails=list(cc_emails) if cc_emails else [],
             subject=_re_prefixed(inbound.subject),
             body_text=final_text,
             body_html=final_html,

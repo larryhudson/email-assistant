@@ -422,6 +422,19 @@ class AssistantRuntime:
                 deps.pending_attachments,
             )
 
+            # Owner-as-sender → cc the end-user so they stay in the loop on
+            # admin/maintenance threads. End-user-as-sender → no cc. If the
+            # owner *is* the end-user (single-tenant personal assistant),
+            # there's nobody to cc.
+            cc_emails: list[str] = []
+            if (
+                scope.owner_email
+                and scope.end_user_email
+                and inbound_email.from_email.lower() == scope.owner_email.lower()
+                and scope.owner_email.lower() != scope.end_user_email.lower()
+            ):
+                cc_emails = [scope.end_user_email]
+
             envelope = self._envelope_builder.build(
                 inbound=inbound_email,
                 from_email=scope.inbound_address,
@@ -433,6 +446,7 @@ class AssistantRuntime:
                     run_id=run_id,
                     admin_base_url=self._admin_base_url,
                 ),
+                cc_emails=cc_emails,
             )
 
             sent = await self._email_provider.send_reply(envelope)

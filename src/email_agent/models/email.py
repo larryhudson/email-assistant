@@ -47,6 +47,7 @@ class NormalizedOutboundEmail(_Frozen):
 
     from_email: str
     to_emails: list[str]
+    cc_emails: list[str] = Field(default_factory=list)
     subject: str
     body_text: str
     body_html: str | None = None

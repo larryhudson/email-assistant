@@ -13,7 +13,9 @@ def _scope(assistant_id: str = "a-1", end_user_id: str = "u-1") -> AssistantScop
     return AssistantScope(
         assistant_id=assistant_id,
         owner_id="o-1",
+        owner_email="owner@example.com",
         end_user_id=end_user_id,
+        end_user_email="mum@example.com",
         inbound_address=f"{assistant_id}@assistants.example.com",
         status=AssistantStatus.ACTIVE,
         allowed_senders=("mum@example.com",),

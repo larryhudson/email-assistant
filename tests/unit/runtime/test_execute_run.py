@@ -39,7 +39,7 @@ from email_agent.sandbox.workspace_provider import StaticWorkspaceProvider, Work
 
 
 async def _seed_assistant(session: AsyncSession) -> None:
-    session.add(Owner(id="o-1", name="Larry"))
+    session.add(Owner(id="o-1", name="Larry", email="owner@example.com"))
     session.add(EndUser(id="u-1", owner_id="o-1", email="mum@example.com"))
     session.add(
         Budget(
@@ -76,7 +76,9 @@ def _scope() -> AssistantScope:
     return AssistantScope(
         assistant_id="a-1",
         owner_id="o-1",
+        owner_email="owner@example.com",
         end_user_id="u-1",
+        end_user_email="mum@example.com",
         inbound_address="mum@assistants.example.com",
         status=AssistantStatus.ACTIVE,
         allowed_senders=("mum@example.com",),
@@ -220,6 +222,86 @@ async def test_execute_run_sends_reply_and_records_completion(
 
         usage_rows = (await session.execute(select(UsageLedger))).scalars().all()
         assert len(usage_rows) == 1
+
+
+async def test_owner_inbound_cc_routes_reply_to_owner_with_end_user_cc(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """When the owner emails the assistant, the reply must address the owner
+    and cc the end-user so the end-user stays in the loop on admin threads."""
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+        # Allow the owner to email this assistant.
+        from email_agent.db.models import Assistant as AssistantRow
+
+        a = await session.get(AssistantRow, "a-1")
+        assert a is not None
+        a.allowed_senders = ["mum@example.com", "owner@example.com"]
+        await session.commit()
+
+    email_provider = InMemoryEmailProvider()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    agent = AssistantAgent()
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        workspace_provider=StaticWorkspaceProvider(workspace),
+        memory=InMemoryMemoryAdapter(),
+        agent=agent,
+    )
+
+    # Inbound from the owner, not the end-user.
+    owner_inbound = NormalizedInboundEmail(
+        provider_message_id="prov-owner-1",
+        message_id_header="<m-owner-1@x>",
+        from_email="owner@example.com",
+        to_emails=["mum@assistants.example.com"],
+        subject="config tweak",
+        body_text="bump the daily check-in to 8am please",
+        received_at=datetime(2026, 5, 10, 12, 0, tzinfo=UTC),
+    )
+    await runtime.accept_inbound(owner_inbound)
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    with agent.override_model(_scope(), _read_then_reply()):
+        outcome = await runtime.execute_run(run_id)
+
+    assert isinstance(outcome, Completed)
+
+    sent = email_provider.sent[0]
+    assert sent.to_emails == ["owner@example.com"]
+    assert sent.cc_emails == ["mum@example.com"]
+
+
+async def test_end_user_inbound_does_not_cc_owner(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """When the end-user emails the assistant, the reply has no cc."""
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    email_provider = InMemoryEmailProvider()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    agent = AssistantAgent()
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        workspace_provider=StaticWorkspaceProvider(workspace),
+        memory=InMemoryMemoryAdapter(),
+        agent=agent,
+    )
+
+    await runtime.accept_inbound(_inbound())  # from mum@example.com
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    with agent.override_model(_scope(), _read_then_reply()):
+        await runtime.execute_run(run_id)
+
+    assert email_provider.sent[0].cc_emails == []
 
 
 async def test_execute_run_injects_recalled_memory_into_prompt(
@@ -423,12 +505,11 @@ async def test_execute_run_records_failed_run_and_reraises(
     ):
         await runtime.execute_run(run_id)
 
-    # End-user notification fires; owner notification is skipped because
-    # the seeded owner row has no email configured (legacy fixture).
-    assert len(email_provider.sent) == 1
-    apology = email_provider.sent[0]
+    # Both notifications fire: an apology to the end-user (threaded reply) and
+    # an alert to the owner (separate envelope).
+    assert len(email_provider.sent) == 2
+    apology = next(s for s in email_provider.sent if s.in_reply_to_header == "<m1@x>")
     assert apology.to_emails == ["mum@example.com"]
-    assert apology.in_reply_to_header == "<m1@x>"
     assert "exploded" not in apology.body_text
 
     async with sqlite_session_factory() as session:

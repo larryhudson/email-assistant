@@ -112,6 +112,8 @@ class MailgunEmailProvider:
             "text": reply.body_text,
             "h:Message-Id": reply.message_id_header.strip("<>"),
         }
+        if reply.cc_emails:
+            data["cc"] = list(reply.cc_emails)
         if reply.body_html is not None:
             data["html"] = reply.body_html
         if reply.in_reply_to_header is not None:

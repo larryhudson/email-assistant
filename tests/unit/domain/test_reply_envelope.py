@@ -39,6 +39,35 @@ def test_builds_envelope_with_threading_headers_and_re_prefix() -> None:
     assert envelope.references_headers == ["<r0@x>", "<m1@x>"]
 
 
+def test_envelope_carries_cc_emails_when_provided() -> None:
+    """When the runtime passes `cc_emails`, the outbound envelope must
+    surface them so the email adapter can populate the Cc header."""
+    builder = ReplyEnvelopeBuilder()
+    envelope = builder.build(
+        inbound=_inbound(),
+        from_email="mum@assistants.example.com",
+        body_text="ack",
+        attachments=[],
+        message_id_factory=lambda: "<run-abc@x>",
+        cc_emails=["mum@example.com"],
+    )
+
+    assert envelope.cc_emails == ["mum@example.com"]
+
+
+def test_envelope_cc_defaults_empty_when_not_passed() -> None:
+    builder = ReplyEnvelopeBuilder()
+    envelope = builder.build(
+        inbound=_inbound(),
+        from_email="mum@assistants.example.com",
+        body_text="ack",
+        attachments=[],
+        message_id_factory=lambda: "<run-abc@x>",
+    )
+
+    assert envelope.cc_emails == []
+
+
 def test_does_not_double_prefix_re() -> None:
     builder = ReplyEnvelopeBuilder()
     envelope = builder.build(

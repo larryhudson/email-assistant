@@ -196,6 +196,7 @@ async def _upsert_outbound_message(
         references_headers=list(envelope.references_headers),
         from_email=envelope.from_email,
         to_emails=list(envelope.to_emails),
+        cc_emails=list(envelope.cc_emails),
         subject=envelope.subject,
         body_text=envelope.body_text,
         body_html=envelope.body_html,

@@ -29,7 +29,9 @@ class AssistantScope(BaseModel):
 
     assistant_id: str
     owner_id: str
+    owner_email: str
     end_user_id: str
+    end_user_email: str
     inbound_address: str
     status: AssistantStatus
     allowed_senders: tuple[str, ...]
@@ -64,7 +66,9 @@ class AssistantScope(BaseModel):
         return cls(
             assistant_id=assistant.id,
             owner_id=owner.id,
+            owner_email=owner.email,
             end_user_id=end_user.id,
+            end_user_email=end_user.email,
             inbound_address=assistant.inbound_address,
             status=AssistantStatus(assistant.status),
             allowed_senders=tuple(assistant.allowed_senders),
