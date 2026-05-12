@@ -241,7 +241,15 @@ class AssistantRuntime:
                 "and projector to be configured"
             )
 
-        scope, _run, inbound, thread, messages, attachments = await self._load_run(run_id)
+        (
+            scope,
+            _run,
+            inbound,
+            thread,
+            threads,
+            messages,
+            attachments,
+        ) = await self._load_run(run_id)
         workspace = await self._workspace_provider.get_workspace(scope.assistant_id)
         inbound_email = _inbound_email_from_message(inbound)
 
@@ -259,12 +267,15 @@ class AssistantRuntime:
 
         assert isinstance(decision, Allow)
 
-        # Project the thread to the host inputs dir, then mirror into the assistant workspace.
+        # Project every thread this assistant has with the end-user, so the
+        # agent can read prior conversations as context, not just the current
+        # one. The bind-mount stays read-only.
         projection = self._projector.project(
             run_id=run_id,
-            thread=thread,
+            threads=threads,
             messages=messages,
             attachments=attachments,
+            current_thread_id=thread.id,
             current_message_id=inbound.id,
         )
         projected_files = _read_projection_files(projection.run_inputs_dir)
@@ -482,6 +493,7 @@ class AssistantRuntime:
         AgentRun,
         EmailMessage,
         EmailThread,
+        list[EmailThread],
         list[EmailMessage],
         list[EmailAttachmentRow],
     ]:
@@ -514,11 +526,27 @@ class AssistantRuntime:
             assert inbound is not None
             thread = await session.get(EmailThread, run.thread_id)
             assert thread is not None
+            # Pull every thread + every message for this assistant so the
+            # projector can lay out the full conversation history. Heavy
+            # assistants may grow this set; if it becomes a problem we'll
+            # cap by recency, but for now the agent benefits from full
+            # cross-thread context.
+            threads = (
+                (
+                    await session.execute(
+                        select(EmailThread)
+                        .where(EmailThread.assistant_id == run.assistant_id)
+                        .order_by(EmailThread.updated_at.desc(), EmailThread.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
             messages = (
                 (
                     await session.execute(
                         select(EmailMessage)
-                        .where(EmailMessage.thread_id == run.thread_id)
+                        .where(EmailMessage.assistant_id == run.assistant_id)
                         .order_by(EmailMessage.created_at, EmailMessage.id)
                     )
                 )
@@ -539,7 +567,15 @@ class AssistantRuntime:
 
             # Detach so callers can use them after the session closes.
             session.expunge_all()
-            return scope, run, inbound, thread, list(messages), list(attachments)
+            return (
+                scope,
+                run,
+                inbound,
+                thread,
+                list(threads),
+                list(messages),
+                list(attachments),
+            )
 
     async def _record_budget_limited(
         self,
