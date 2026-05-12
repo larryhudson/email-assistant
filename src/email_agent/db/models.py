@@ -206,6 +206,8 @@ class AgentRun(Base):
     triggered_by_scheduled_task_id: Mapped[str | None] = mapped_column(
         ForeignKey("scheduled_tasks.id", ondelete="SET NULL"), nullable=True
     )
+    system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class RunStep(Base):

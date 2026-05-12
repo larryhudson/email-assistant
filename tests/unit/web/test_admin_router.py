@@ -109,6 +109,8 @@ async def _seed_thread_and_run(
     status: str = "completed",
     inbound_body: str = "Hi Sam, what's for dinner?",
     outbound_body: str = "Try chicken thighs and courgette.",
+    system_prompt: str | None = None,
+    user_prompt: str | None = None,
 ) -> None:
     session.add(
         EmailThread(
@@ -165,6 +167,8 @@ async def _seed_thread_and_run(
             error="kaboom" if status == "failed" else None,
             started_at=started,
             completed_at=completed,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
         )
     )
     if status == "completed":
@@ -295,6 +299,61 @@ async def test_run_detail_json_returns_structured_payload(
     assert len(payload["memory_recalls"]) == 1
     assert payload["memory_recalls"][0]["content"].startswith("REMEMBERED-FACT-Z")
     assert payload["usage"]["input_tokens"] == 1500
+
+
+async def test_run_detail_shows_persisted_system_prompt(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    admin_client: TestClient,
+):
+    prompt = (
+        "You are Sam.\n\n# Available skills\n\n"
+        "- **scheduling-tasks** (/workspace/skills/scheduling-tasks/SKILL.md)"
+    )
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+        await _seed_thread_and_run(session, run_id="r-sp", system_prompt=prompt)
+
+    html = admin_client.get("/admin/runs/r-sp").text
+    assert "System prompt" in html
+    assert "scheduling-tasks" in html
+    assert "/workspace/skills/scheduling-tasks/SKILL.md" in html
+
+    payload = admin_client.get("/admin/runs/r-sp.json").json()
+    assert payload["system_prompt"] == prompt
+
+
+async def test_run_detail_shows_persisted_user_prompt(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    admin_client: TestClient,
+):
+    user_prompt = (
+        "A new inbound email has arrived. Read it from 'emails/t-x/0001.md'.\n\n"
+        "Recalled memory:\n- Larry hates rosemary"
+    )
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+        await _seed_thread_and_run(session, run_id="r-up", user_prompt=user_prompt)
+
+    html = admin_client.get("/admin/runs/r-up").text
+    assert "User prompt" in html
+    assert "Recalled memory" in html
+    assert "Larry hates rosemary" in html
+
+    payload = admin_client.get("/admin/runs/r-up.json").json()
+    assert payload["user_prompt"] == user_prompt
+
+
+async def test_run_detail_missing_system_prompt_shows_placeholder(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    admin_client: TestClient,
+):
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+        await _seed_thread_and_run(session, run_id="r-nosp", system_prompt=None)
+
+    html = admin_client.get("/admin/runs/r-nosp").text
+    assert "Not recorded" in html
+    assert admin_client.get("/admin/runs/r-nosp.json").json()["system_prompt"] is None
 
 
 async def test_run_detail_404s_unknown_run(

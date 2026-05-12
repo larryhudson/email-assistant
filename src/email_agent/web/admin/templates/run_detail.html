@@ -17,6 +17,30 @@
 </div>
 
 <section class="section">
+  <h3>System prompt</h3>
+  {% if run.system_prompt %}
+    <details>
+      <summary>Show full system prompt ({{ run.system_prompt | length }} chars)</summary>
+      <pre class="body">{{ run.system_prompt }}</pre>
+    </details>
+  {% else %}
+    <p class="muted">Not recorded (run predates prompt capture, or never reached the model).</p>
+  {% endif %}
+</section>
+
+<section class="section">
+  <h3>User prompt</h3>
+  {% if run.user_prompt %}
+    <details>
+      <summary>Show user prompt ({{ run.user_prompt | length }} chars)</summary>
+      <pre class="body">{{ run.user_prompt }}</pre>
+    </details>
+  {% else %}
+    <p class="muted">Not recorded.</p>
+  {% endif %}
+</section>
+
+<section class="section">
   <h3>Inbound</h3>
   {% if inbound %}
     <dl class="kv-grid">

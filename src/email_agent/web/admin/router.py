@@ -105,6 +105,8 @@ class _RunDetailPayload(BaseModel):
     error: str | None
     started_at: datetime | None
     completed_at: datetime | None
+    system_prompt: str | None
+    user_prompt: str | None
     inbound: _MessagePayload | None
     outbound: _MessagePayload | None
     steps: list[_StepPayload]
@@ -320,6 +322,8 @@ async def _load_run_detail(
             error=run.error,
             started_at=run.started_at,
             completed_at=run.completed_at,
+            system_prompt=run.system_prompt,
+            user_prompt=run.user_prompt,
             inbound=_message_payload(inbound) if inbound else None,
             outbound=_message_payload(outbound) if outbound else None,
             steps=[

@@ -61,7 +61,11 @@ from email_agent.models.email import (
 )
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import PendingAttachment, ProjectedFile
-from email_agent.sandbox.skills import render_context_block, render_skills_block
+from email_agent.sandbox.skills import (
+    SYSTEM_PROMPT_GUIDANCE,
+    render_context_block,
+    render_skills_block,
+)
 from email_agent.sandbox.workspace import AssistantWorkspace
 from email_agent.sandbox.workspace_provider import WorkspaceProvider
 from email_agent.scheduled.service import ScheduledTaskService
@@ -267,8 +271,15 @@ class AssistantRuntime:
         projected_files = _read_projection_files(projection.run_inputs_dir)
         await workspace.project_emails(projected_files)
         await workspace.ensure_starter_files()
-        skills_block = render_skills_block(await workspace.load_skills())
+        skills = await workspace.load_skills()
+        skills_block = render_skills_block(skills)
         context_block = render_context_block(await workspace.read_context())
+        _log.info(
+            "run %s loaded %d skill(s) into prompt: %s",
+            run_id,
+            len(skills),
+            ",".join(s.name for s in skills) or "<none>",
+        )
 
         # Pre-call recall once with the inbound body (truncated) as the query.
         # Reliable beats clever — gives the model prior context without it
@@ -285,6 +296,27 @@ class AssistantRuntime:
             memories=memory_context.memories,
         )
         prompt = prompt_context.prompt
+
+        # Persist the fully-assembled system prompt + user prompt on the run
+        # row so the admin UI can show exactly what the model saw. System
+        # order mirrors assistant_agent._build_agent: scope prompt, workspace
+        # guidance, then the dynamic context + skills blocks.
+        full_system_prompt = "\n\n".join(
+            part
+            for part in [
+                scope.system_prompt.strip(),
+                SYSTEM_PROMPT_GUIDANCE.strip(),
+                context_block.strip(),
+                skills_block.strip(),
+            ]
+            if part
+        )
+        async with self._session_factory() as session:
+            run_row = await session.get(AgentRun, run_id)
+            if run_row is not None:
+                run_row.system_prompt = full_system_prompt
+                run_row.user_prompt = prompt
+                await session.commit()
         pending_attachments: list[PendingAttachment] = []
         deps = AgentDeps(
             assistant_id=scope.assistant_id,
