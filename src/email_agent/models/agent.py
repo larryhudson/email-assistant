@@ -20,6 +20,8 @@ class _ToolsetLike(Protocol):
 
     async def memory_search(self, query: str) -> list[Memory] | str: ...
 
+    async def web_search(self, query: str, max_results: int = 5) -> str: ...
+
     async def list_scheduled_tasks(self) -> list[ScheduledTask]: ...
 
     async def create_scheduled_task(self, kind: str, when: str, name: str, body: str) -> str: ...
@@ -41,6 +43,7 @@ class AgentDeps:
     thread_id: str
     toolset: _ToolsetLike
     pending_attachments: list[PendingAttachment] = field(default_factory=list)
+    metered_usage: list["MeteredUsage"] = field(default_factory=list)
     skills_block: str = ""
     context_block: str = ""
 
@@ -56,6 +59,23 @@ class RunUsage:
     input_tokens: int
     output_tokens: int
     cost_usd: Decimal
+
+
+@dataclass(frozen=True)
+class MeteredUsage:
+    """Non-token billable usage attached to an agent run.
+
+    Examples: one Brave web search request. `input_tokens` and
+    `output_tokens` stay zero for request-metered tools so the ledger
+    remains explicit about what kind of usage was charged.
+    """
+
+    provider: str
+    model: str
+    cost_usd: Decimal
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tool_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +95,7 @@ class AgentResult:
     body: str
     usage: RunUsage
     steps: list["RunStepRecord"] = field(default_factory=list)
+    metered_usage: list[MeteredUsage] = field(default_factory=list)
 
 
 class AgentRunError(Exception):
@@ -90,17 +111,20 @@ class AgentRunError(Exception):
         *,
         usage: RunUsage,
         steps: list[RunStepRecord],
+        metered_usage: list[MeteredUsage] | None = None,
     ) -> None:
         super().__init__(str(original))
         self.original = original
         self.usage = usage
         self.steps = steps
+        self.metered_usage = metered_usage or []
 
 
 __all__ = [
     "AgentDeps",
     "AgentResult",
     "AgentRunError",
+    "MeteredUsage",
     "RunStepRecord",
     "RunUsage",
 ]

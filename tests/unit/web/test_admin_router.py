@@ -298,7 +298,8 @@ async def test_run_detail_json_returns_structured_payload(
     assert {s["kind"] for s in payload["steps"]} == {"model", "tool:bash"}
     assert len(payload["memory_recalls"]) == 1
     assert payload["memory_recalls"][0]["content"].startswith("REMEMBERED-FACT-Z")
-    assert payload["usage"]["input_tokens"] == 1500
+    assert payload["usage"][0]["input_tokens"] == 1500
+    assert payload["usage_total_cost"] == "0.0007"
 
 
 async def test_run_detail_shows_persisted_system_prompt(

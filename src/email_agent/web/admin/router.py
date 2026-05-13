@@ -111,7 +111,8 @@ class _RunDetailPayload(BaseModel):
     outbound: _MessagePayload | None
     steps: list[_StepPayload]
     memory_recalls: list[_MemoryRecallPayload]
-    usage: _UsagePayload | None
+    usage: list[_UsagePayload]
+    usage_total_cost: Decimal
 
 
 def make_admin_router(session_factory: async_sessionmaker[AsyncSession]) -> APIRouter:
@@ -171,6 +172,7 @@ def make_admin_router(session_factory: async_sessionmaker[AsyncSession]) -> APIR
                 "steps": detail.steps,
                 "memory_recalls": detail.memory_recalls,
                 "usage": detail.usage,
+                "usage_total_cost": detail.usage_total_cost,
             },
         )
 
@@ -310,9 +312,17 @@ async def _load_run_detail(
             .scalars()
             .all()
         )
-        usage = (
-            await session.execute(select(UsageLedger).where(UsageLedger.run_id == run_id))
-        ).scalar_one_or_none()
+        usage_rows = (
+            (
+                await session.execute(
+                    select(UsageLedger)
+                    .where(UsageLedger.run_id == run_id)
+                    .order_by(UsageLedger.created_at, UsageLedger.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
 
         return _RunDetailPayload(
             id=run.id,
@@ -342,16 +352,18 @@ async def _load_run_detail(
                 )
                 for r in recalls
             ],
-            usage=_UsagePayload(
-                provider=usage.provider,
-                model=usage.model,
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                cost_usd=usage.cost_usd,
-                budget_period=usage.budget_period,
-            )
-            if usage
-            else None,
+            usage=[
+                _UsagePayload(
+                    provider=usage.provider,
+                    model=usage.model,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    cost_usd=usage.cost_usd,
+                    budget_period=usage.budget_period,
+                )
+                for usage in usage_rows
+            ],
+            usage_total_cost=sum((u.cost_usd for u in usage_rows), Decimal("0")),
         )
 
 

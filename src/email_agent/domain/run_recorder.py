@@ -13,7 +13,7 @@ from email_agent.db.models import (
     RunStep,
     UsageLedger,
 )
-from email_agent.models.agent import RunStepRecord, RunUsage
+from email_agent.models.agent import MeteredUsage, RunStepRecord, RunUsage
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.email import NormalizedOutboundEmail, SentEmail
 
@@ -33,6 +33,7 @@ class CompletedRun:
     sent: SentEmail
     steps: list[RunStepRecord]
     usage: RunUsage
+    metered_usage: list[MeteredUsage] | None = None
 
 
 class RunRecorder:
@@ -94,10 +95,12 @@ class RunRecorder:
                     model=completed.scope.model_name,
                     input_tokens=completed.usage.input_tokens,
                     output_tokens=completed.usage.output_tokens,
-                    cost_usd=completed.usage.cost_usd,
+                    cost_usd=_model_cost(completed.usage, completed.metered_usage or []),
                     budget_period=datetime.now(UTC).strftime("%Y-%m"),
                 )
             )
+            for item in completed.metered_usage or []:
+                session.add(_usage_ledger_from_metered(run, item))
 
             await session.commit()
 
@@ -115,6 +118,7 @@ class RunRecorder:
         error: str,
         usage: RunUsage | None = None,
         steps: list[RunStepRecord] | None = None,
+        metered_usage: list[MeteredUsage] | None = None,
         model_name: str | None = None,
     ) -> None:
         """Mark the run failed. If partial usage / steps were captured from
@@ -154,10 +158,12 @@ class RunRecorder:
                         model=model_name or "",
                         input_tokens=usage.input_tokens,
                         output_tokens=usage.output_tokens,
-                        cost_usd=usage.cost_usd,
+                        cost_usd=_model_cost(usage, metered_usage or []),
                         budget_period=datetime.now(UTC).strftime("%Y-%m"),
                     )
                 )
+            for item in metered_usage or []:
+                session.add(_usage_ledger_from_metered(run, item))
 
             await session.commit()
 
@@ -213,6 +219,28 @@ async def _upsert_outbound_message(
         )
     )
     return outbound
+
+
+def _usage_ledger_from_metered(run: AgentRun, item: MeteredUsage) -> UsageLedger:
+    return UsageLedger(
+        id=f"u-{uuid.uuid4().hex[:8]}",
+        assistant_id=run.assistant_id,
+        run_id=run.id,
+        provider=item.provider,
+        model=item.model,
+        input_tokens=item.input_tokens,
+        output_tokens=item.output_tokens,
+        cost_usd=item.cost_usd,
+        budget_period=datetime.now(UTC).strftime("%Y-%m"),
+    )
+
+
+def _model_cost(usage: RunUsage, metered_usage: list[MeteredUsage]):
+    from decimal import Decimal as _Decimal
+
+    metered_cost = sum((item.cost_usd for item in metered_usage), _Decimal("0"))
+    model_cost = usage.cost_usd - metered_cost
+    return max(model_cost, _Decimal("0"))
 
 
 __all__ = ["CompletedRun", "RunRecorder"]

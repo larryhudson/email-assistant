@@ -95,16 +95,21 @@ out: {{ s.output_summary }}</pre>
   {% endif %}
 </section>
 
-{% if usage %}
 <section class="section">
   <h3>Usage</h3>
+  {% if usage %}
+  {% for u in usage %}
   <dl class="kv-grid">
-    <div><dt>Provider</dt><dd>{{ usage.provider }}</dd></div>
-    <div><dt>Model</dt><dd><code>{{ usage.model }}</code></dd></div>
-    <div><dt>Input tokens</dt><dd>{{ usage.input_tokens }}</dd></div>
-    <div><dt>Output tokens</dt><dd>{{ usage.output_tokens }}</dd></div>
-    <div><dt>Cost</dt><dd>${{ "%.4f"|format(usage.cost_usd) }}</dd></div>
+    <div><dt>Provider</dt><dd>{{ u.provider }}</dd></div>
+    <div><dt>Model</dt><dd><code>{{ u.model }}</code></dd></div>
+    <div><dt>Input tokens</dt><dd>{{ u.input_tokens }}</dd></div>
+    <div><dt>Output tokens</dt><dd>{{ u.output_tokens }}</dd></div>
+    <div><dt>Cost</dt><dd>${{ "%.4f"|format(u.cost_usd) }}</dd></div>
   </dl>
+  {% endfor %}
+  <p><strong>Total:</strong> ${{ "%.4f"|format(usage_total_cost) }}</p>
+  {% else %}
+    <p class="muted">No usage recorded.</p>
+  {% endif %}
 </section>
-{% endif %}
 {% endblock %}

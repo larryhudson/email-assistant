@@ -1,8 +1,13 @@
+from decimal import Decimal
+
 from email_agent.agent.toolset import AgentToolset
 from email_agent.memory.inmemory import InMemoryMemoryAdapter
+from email_agent.models.agent import MeteredUsage
 from email_agent.models.sandbox import PendingAttachment
 from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
 from email_agent.sandbox.workspace import AssistantWorkspace
+from email_agent.search.inmemory import InMemorySearchAdapter
+from email_agent.search.port import SearchResult
 
 
 def _toolset(
@@ -10,6 +15,8 @@ def _toolset(
     *,
     memory: InMemoryMemoryAdapter | None = None,
     pending: list[PendingAttachment] | None = None,
+    metered: list[MeteredUsage] | None = None,
+    search: InMemorySearchAdapter | None = None,
 ) -> AgentToolset:
     return AgentToolset(
         assistant_id="a-1",
@@ -18,6 +25,8 @@ def _toolset(
         workspace=AssistantWorkspace(env),
         memory=memory or InMemoryMemoryAdapter(),
         pending_attachments=pending if pending is not None else [],
+        metered_usage=metered if metered is not None else [],
+        search=search,
     )
 
 
@@ -96,3 +105,37 @@ async def test_memory_search_delegates_by_assistant_id() -> None:
 
     assert isinstance(result, list)
     assert [m.content for m in result] == ["[t-1/assistant] likes short replies"]
+
+
+async def test_web_search_runs_on_host_adapter_and_records_metered_usage() -> None:
+    metered: list[MeteredUsage] = []
+    search = InMemorySearchAdapter(
+        results=[
+            SearchResult(
+                title="Result title",
+                url="https://example.com/news",
+                snippet="Fresh public web content",
+                age="1 day ago",
+            )
+        ],
+        cost_usd=Decimal("0.0050"),
+    )
+
+    result = await _toolset(
+        InMemoryEnvironment(),
+        metered=metered,
+        search=search,
+    ).web_search("latest thing", max_results=3)
+
+    assert search.calls == [("latest thing", 3)]
+    assert "UNTRUSTED EXTERNAL WEB SEARCH RESULTS" in result
+    assert "not from the user" in result
+    assert "Fresh public web content" in result
+    assert metered == [
+        MeteredUsage(
+            provider="brave",
+            model="web-search",
+            cost_usd=Decimal("0.0050"),
+            tool_name="web_search",
+        )
+    ]

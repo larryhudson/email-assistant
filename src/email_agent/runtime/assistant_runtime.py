@@ -51,7 +51,7 @@ from email_agent.domain.run_footer import strip_footer
 from email_agent.domain.run_recorder import CompletedRun, RunRecorder
 from email_agent.domain.thread_resolver import ThreadResolver
 from email_agent.domain.workspace_projector import EmailWorkspaceProjector
-from email_agent.models.agent import AgentDeps, AgentRunError
+from email_agent.models.agent import AgentDeps, AgentRunError, MeteredUsage
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.email import (
     EmailAttachment,
@@ -69,6 +69,7 @@ from email_agent.sandbox.skills import (
 from email_agent.sandbox.workspace import AssistantWorkspace
 from email_agent.sandbox.workspace_provider import WorkspaceProvider
 from email_agent.scheduled.service import ScheduledTaskService
+from email_agent.search.port import SearchPort
 
 _log = logging.getLogger(__name__)
 
@@ -152,6 +153,7 @@ class AssistantRuntime:
         model_factory: "Callable[[AssistantScope], Model] | None" = None,
         run_agent_defer: Callable[..., Awaitable[None]] | None = None,
         scheduled_tasks: ScheduledTaskService | None = None,
+        search: SearchPort | None = None,
         admin_base_url: str | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -174,6 +176,7 @@ class AssistantRuntime:
         self._model_factory = model_factory
         self._run_agent_defer = run_agent_defer
         self._scheduled_tasks = scheduled_tasks or ScheduledTaskService(session_factory)
+        self._search = search
         self._context_assembler = RunContextAssembler()
         self._admin_base_url = admin_base_url
 
@@ -334,6 +337,7 @@ class AssistantRuntime:
                 run_row.user_prompt = prompt
                 await session.commit()
         pending_attachments: list[PendingAttachment] = []
+        metered_usage: list[MeteredUsage] = []
         deps = AgentDeps(
             assistant_id=scope.assistant_id,
             run_id=run_id,
@@ -345,9 +349,12 @@ class AssistantRuntime:
                 workspace=workspace,
                 memory=self._memory,
                 pending_attachments=pending_attachments,
+                metered_usage=metered_usage,
+                search=self._search,
                 scheduled_tasks=self._scheduled_tasks,
             ),
             pending_attachments=pending_attachments,
+            metered_usage=metered_usage,
             skills_block=skills_block,
             context_block=context_block,
         )
@@ -391,6 +398,7 @@ class AssistantRuntime:
                 error=str(wrapped.original),
                 usage=wrapped.usage,
                 steps=wrapped.steps,
+                metered_usage=wrapped.metered_usage,
                 model_name=scope.model_name,
             )
             await self._notify_run_failed(
@@ -459,6 +467,7 @@ class AssistantRuntime:
                     sent=sent,
                     steps=agent_result.steps,
                     usage=agent_result.usage,
+                    metered_usage=agent_result.metered_usage,
                 )
             )
         except Exception as exc:
@@ -467,6 +476,7 @@ class AssistantRuntime:
                 error=str(exc),
                 usage=agent_result.usage,
                 steps=agent_result.steps,
+                metered_usage=agent_result.metered_usage,
                 model_name=scope.model_name,
             )
             await self._notify_run_failed(

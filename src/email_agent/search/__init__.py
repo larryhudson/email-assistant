@@ -1,0 +1,1 @@
+"""Search ports and adapters."""

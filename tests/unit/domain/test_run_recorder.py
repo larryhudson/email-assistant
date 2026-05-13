@@ -21,7 +21,7 @@ from email_agent.db.models import (
 )
 from email_agent.domain.inbound_persister import persist_inbound
 from email_agent.domain.run_recorder import CompletedRun, RunRecorder
-from email_agent.models.agent import RunStepRecord, RunUsage
+from email_agent.models.agent import MeteredUsage, RunStepRecord, RunUsage
 from email_agent.models.assistant import AssistantScope, AssistantStatus
 from email_agent.models.email import (
     NormalizedInboundEmail,
@@ -205,6 +205,55 @@ async def test_record_completion_writes_outbound_and_updates_run(
         )
         assert len(index_rows) == 1
         assert index_rows[0].thread_id == "t-1"
+
+
+async def test_record_completion_persists_metered_tool_usage_separately(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    async with sqlite_session_factory() as session:
+        run_id, _ = await _seed_run(session, tmp_path=tmp_path)
+
+    recorder = RunRecorder(sqlite_session_factory)
+    await recorder.record_completion(
+        CompletedRun(
+            run_id=run_id,
+            scope=_scope(),
+            outbound=_outbound(),
+            sent=SentEmail(provider_message_id="prov-out-1", message_id_header="<run-abc@x>"),
+            steps=[
+                RunStepRecord(
+                    kind="tool:web_search",
+                    input_summary='{"query": "x"}',
+                    output_summary="results",
+                    cost_usd=Decimal("0.0050"),
+                )
+            ],
+            usage=RunUsage(input_tokens=100, output_tokens=20, cost_usd=Decimal("0.0350")),
+            metered_usage=[
+                MeteredUsage(
+                    provider="brave",
+                    model="web-search",
+                    cost_usd=Decimal("0.0050"),
+                    tool_name="web_search",
+                )
+            ],
+        )
+    )
+
+    async with sqlite_session_factory() as session:
+        usage_rows = (
+            (await session.execute(select(UsageLedger).order_by(UsageLedger.provider)))
+            .scalars()
+            .all()
+        )
+        assert len(usage_rows) == 2
+        brave = next(u for u in usage_rows if u.provider == "brave")
+        model = next(u for u in usage_rows if u.provider == "openai-compat")
+        assert brave.input_tokens == 0
+        assert brave.output_tokens == 0
+        assert brave.cost_usd == Decimal("0.0050")
+        assert model.cost_usd == Decimal("0.0300")
 
 
 async def test_record_completion_idempotent_on_duplicate(

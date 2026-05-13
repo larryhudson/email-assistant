@@ -36,6 +36,8 @@ from email_agent.runtime.assistant_runtime import AssistantRuntime, Completed
 from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
 from email_agent.sandbox.workspace import AssistantWorkspace
 from email_agent.sandbox.workspace_provider import StaticWorkspaceProvider, WorkspaceProvider
+from email_agent.search.inmemory import InMemorySearchAdapter
+from email_agent.search.port import SearchResult
 
 
 async def _seed_assistant(session: AsyncSession) -> None:
@@ -142,6 +144,7 @@ def _build_runtime(
     workspace_provider: WorkspaceProvider,
     memory: InMemoryMemoryAdapter,
     agent: AssistantAgent,
+    search: InMemorySearchAdapter | None = None,
 ) -> AssistantRuntime:
     return AssistantRuntime(
         session_factory,
@@ -156,6 +159,7 @@ def _build_runtime(
         envelope_builder=ReplyEnvelopeBuilder(),
         message_id_factory=lambda: "<run-abc@assistants.example.com>",
         provider_message_id_factory=lambda: "prov-out-1",
+        search=search,
     )
 
 
@@ -222,6 +226,85 @@ async def test_execute_run_sends_reply_and_records_completion(
 
         usage_rows = (await session.execute(select(UsageLedger))).scalars().all()
         assert len(usage_rows) == 1
+
+
+def _search_then_reply() -> FunctionModel:
+    state = {"called": False}
+
+    async def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if not state["called"]:
+            state["called"] = True
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="web_search",
+                        args={"query": "current public fact", "max_results": 1},
+                    )
+                ]
+            )
+        for msg in reversed(messages):
+            for part in getattr(msg, "parts", []):
+                if isinstance(part, ToolReturnPart):
+                    assert "UNTRUSTED EXTERNAL WEB SEARCH RESULTS" in str(part.content)
+                    return ModelResponse(parts=[TextPart(content="Found it.")])
+        return ModelResponse(parts=[TextPart(content="ok")])
+
+    return FunctionModel(fn)
+
+
+async def test_execute_run_records_web_search_tool_cost(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    from email_agent.db.models import RunStep
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    search = InMemorySearchAdapter(
+        results=[
+            SearchResult(
+                title="Current result",
+                url="https://example.com/current",
+                snippet="current public fact",
+            )
+        ],
+        cost_usd=Decimal("0.0050"),
+    )
+    email_provider = InMemoryEmailProvider()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    memory = InMemoryMemoryAdapter()
+    agent = AssistantAgent(has_web_search=True)
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        workspace_provider=StaticWorkspaceProvider(workspace),
+        memory=memory,
+        agent=agent,
+        search=search,
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    with agent.override_model(_scope(), _search_then_reply()):
+        outcome = await runtime.execute_run(run_id)
+
+    assert isinstance(outcome, Completed)
+    assert search.calls == [("current public fact", 1)]
+
+    async with sqlite_session_factory() as session:
+        usage_rows = (await session.execute(select(UsageLedger))).scalars().all()
+        assert {u.provider for u in usage_rows} == {"openai-compat", "brave"}
+        brave = next(u for u in usage_rows if u.provider == "brave")
+        assert brave.cost_usd == Decimal("0.0050")
+        assert brave.input_tokens == 0
+        assert brave.output_tokens == 0
+
+        steps = (await session.execute(select(RunStep))).scalars().all()
+        search_step = next(s for s in steps if s.kind == "tool:web_search")
+        assert search_step.cost_usd == Decimal("0.0050")
 
 
 async def test_owner_inbound_cc_routes_reply_to_owner_with_end_user_cc(

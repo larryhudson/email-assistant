@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     fireworks_api_key: SecretStr
     fireworks_model_id: str = "accounts/fireworks/models/minimax-m2p7"
 
+    brave_search_api_key: SecretStr | None = None
+    web_search_enabled: bool = True
+    brave_search_timeout_seconds: float = 30.0
+
     # Cognee LLM provider — defaults to Fireworks via LiteLLM's "custom"
     # provider so it shares the agent's existing key. Set
     # `COGNEE_LLM_API_KEY=$FIREWORKS_API_KEY` in .env (same value, separate

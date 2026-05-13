@@ -11,11 +11,13 @@ from pydantic_ai.models.test import TestModel
 from email_agent.agent.assistant_agent import AssistantAgent
 from email_agent.agent.toolset import AgentToolset
 from email_agent.memory.inmemory import InMemoryMemoryAdapter
-from email_agent.models.agent import AgentDeps
+from email_agent.models.agent import AgentDeps, MeteredUsage
 from email_agent.models.assistant import AssistantScope, AssistantStatus
 from email_agent.models.sandbox import PendingAttachment
 from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
 from email_agent.sandbox.workspace import AssistantWorkspace
+from email_agent.search.inmemory import InMemorySearchAdapter
+from email_agent.search.port import SearchResult
 
 
 def _scope() -> AssistantScope:
@@ -44,10 +46,13 @@ def _deps(
     skills_block: str = "",
     context_block: str = "",
     scheduled_tasks: object | None = None,
+    search: InMemorySearchAdapter | None = None,
+    metered: list[MeteredUsage] | None = None,
 ) -> AgentDeps:
     actual_env = env or InMemoryEnvironment()
     actual_memory = memory or InMemoryMemoryAdapter()
     actual_pending = pending if pending is not None else []
+    actual_metered = metered if metered is not None else []
     return AgentDeps(
         assistant_id="a-1",
         run_id="r-1",
@@ -59,9 +64,12 @@ def _deps(
             workspace=AssistantWorkspace(actual_env),
             memory=actual_memory,
             pending_attachments=actual_pending,
+            metered_usage=actual_metered,
+            search=search,
             scheduled_tasks=scheduled_tasks,  # ty: ignore[invalid-argument-type]
         ),
         pending_attachments=actual_pending,
+        metered_usage=actual_metered,
         skills_block=skills_block,
         context_block=context_block,
     )
@@ -189,6 +197,37 @@ async def test_memory_search_bypasses_sandbox() -> None:
     assert "kicks off Monday" in result.body
     assert "needs a budget" in result.body
     assert "different topic" not in result.body
+
+
+async def test_web_search_tool_routes_through_host_search_adapter() -> None:
+    from decimal import Decimal
+
+    search = InMemorySearchAdapter(
+        results=[
+            SearchResult(
+                title="Current result",
+                url="https://example.com/current",
+                snippet="current public fact",
+            )
+        ],
+        cost_usd=Decimal("0.0050"),
+    )
+    metered: list[MeteredUsage] = []
+    agent = AssistantAgent(has_web_search=True)
+    deps = _deps(search=search, metered=metered)
+
+    with agent.override_model(
+        _scope(),
+        _call_then_echo("web_search", {"query": "current fact", "max_results": 2}),
+    ):
+        result = await agent.run(_scope(), prompt="search", deps=deps)
+
+    assert search.calls == [("current fact", 2)]
+    assert "UNTRUSTED EXTERNAL WEB SEARCH RESULTS" in result.body
+    assert "current public fact" in result.body
+    assert result.metered_usage == metered
+    assert result.steps[0].kind == "tool:web_search"
+    assert result.steps[0].cost_usd == Decimal("0.0050")
 
 
 async def test_attach_file_appends_pending_attachment() -> None:
@@ -440,6 +479,14 @@ async def test_memory_search_tool_registered_by_default() -> None:
     built = agent._agent_for(_scope())
     tool_names = set(built._function_toolset.tools.keys())
     assert "memory_search" in tool_names
+
+
+async def test_web_search_tool_registered_only_when_enabled() -> None:
+    assert "web_search" not in AssistantAgent()._agent_for(_scope())._function_toolset.tools
+    assert (
+        "web_search"
+        in AssistantAgent(has_web_search=True)._agent_for(_scope())._function_toolset.tools
+    )
 
 
 async def test_run_wraps_underlying_exception_with_partial_usage_and_steps() -> None:

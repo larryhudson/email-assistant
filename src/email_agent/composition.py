@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
     from email_agent.mail.port import EmailProvider
     from email_agent.memory.port import MemoryPort
+    from email_agent.search.port import SearchPort
 
 
 def make_fireworks_model_factory(
@@ -92,6 +93,18 @@ def make_cognee_memory(settings: Settings) -> "MemoryPort":
     return CogneeMemoryAdapter()
 
 
+def make_brave_search(settings: Settings) -> "SearchPort | None":
+    if not settings.web_search_enabled or settings.brave_search_api_key is None:
+        return None
+
+    from email_agent.search.brave import BraveSearchAdapter
+
+    return BraveSearchAdapter(
+        api_key=settings.brave_search_api_key.get_secret_value(),
+        timeout_s=settings.brave_search_timeout_seconds,
+    )
+
+
 def make_runtime_from_settings(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
@@ -99,6 +112,7 @@ def make_runtime_from_settings(
     email_provider: "EmailProvider",
     workspace_provider: WorkspaceProvider | None = None,
     memory: "MemoryPort | None" = None,
+    search: "SearchPort | None" = None,
     use_real_model: bool = True,
     use_real_memory: bool = True,
     use_docker_sandbox: bool = True,
@@ -135,6 +149,8 @@ def make_runtime_from_settings(
         memory = make_cognee_memory(settings) if use_real_memory else InMemoryMemoryAdapter()
     # When memory_enabled is False and the caller didn't supply one, `memory`
     # stays None and the runtime/agent skip recall/curate entirely.
+    if search is None:
+        search = make_brave_search(settings)
     projector = EmailWorkspaceProjector(run_inputs_root=settings.run_inputs_root)
 
     settings.attachments_root.mkdir(parents=True, exist_ok=True)
@@ -164,9 +180,10 @@ def make_runtime_from_settings(
         email_provider=email_provider,
         workspace_provider=workspace_provider,
         memory=memory,
-        agent=AssistantAgent(has_memory=memory is not None),
+        agent=AssistantAgent(has_memory=memory is not None, has_web_search=search is not None),
         projector=projector,
         recorder=recorder,
+        search=search,
         model_factory=model_factory,
         run_timeout_seconds=run_timeout_seconds,
         run_agent_defer=run_agent_defer,
@@ -221,6 +238,7 @@ async def inject_session(
 
 __all__ = [
     "inject_session",
+    "make_brave_search",
     "make_cognee_memory",
     "make_fireworks_model_factory",
     "make_runtime_from_settings",
