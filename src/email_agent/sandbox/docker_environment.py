@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import io
 import tarfile
 import time
@@ -15,7 +16,10 @@ if TYPE_CHECKING:
 
 
 CONTAINER_NAME_PREFIX = "email-agent-sandbox-"
+WORKSPACE_VOLUME_PREFIX = "email-agent-workspace-"
 WORKSPACE_ROOT = "/workspace"
+SANDBOX_DNS_SERVERS = ["1.1.1.1", "8.8.8.8"]
+SANDBOX_DNS_SEARCH = ["."]
 
 
 class DockerEnvironmentAdapter:
@@ -155,7 +159,12 @@ class DockerEnvironmentAdapter:
 
 
 class DockerWorkspaceProvider:
-    """Creates one long-lived Docker-backed workspace per assistant."""
+    """Creates one long-lived Docker-backed workspace per assistant.
+
+    `/workspace` is a Docker named volume rather than a host bind mount. This
+    preserves per-assistant workspace state without exposing the host project
+    path through container mount metadata.
+    """
 
     def __init__(
         self,
@@ -169,7 +178,8 @@ class DockerWorkspaceProvider:
     ) -> None:
         self._client = client
         self._image = image
-        self._data_root = sandbox_data_root
+        # Kept in the constructor for settings/backward compatibility. The
+        # active Docker path now uses named volumes instead of host paths.
         self._memory_mb = memory_mb
         self._cpu_cores = cpu_cores
         self._bash_timeout_seconds = bash_timeout_seconds
@@ -191,13 +201,16 @@ class DockerWorkspaceProvider:
         except docker.errors.NotFound:
             return self._create_container(assistant_id, name)
 
+        if self._container_needs_recreate(container, assistant_id):
+            return self._recreate_container(assistant_id, container)
+
         if container.status != "running":
             container.start()
         return container
 
     def _create_container(self, assistant_id: str, name: str) -> "Container":
-        host_workspace = self._data_root / assistant_id / "workspace"
-        host_workspace.mkdir(parents=True, exist_ok=True)
+        volume_name = self._workspace_volume_name(assistant_id)
+        self._ensure_workspace_volume(assistant_id)
 
         return self._client.containers.run(
             image=self._image,
@@ -205,17 +218,100 @@ class DockerWorkspaceProvider:
             detach=True,
             command=["sleep", "infinity"],
             volumes={
-                str(host_workspace.resolve()): {"bind": WORKSPACE_ROOT, "mode": "rw"},
+                volume_name: {"bind": WORKSPACE_ROOT, "mode": "rw"},
             },
             mem_limit=f"{self._memory_mb}m",
             nano_cpus=int(self._cpu_cores * 1_000_000_000),
             working_dir=WORKSPACE_ROOT,
             tmpfs={"/tmp": ""},
+            dns=SANDBOX_DNS_SERVERS,
+            dns_search=SANDBOX_DNS_SEARCH,
+            dns_opt=[],
+            use_config_proxy=False,
+            init=True,
         )
+
+    def _recreate_container(self, assistant_id: str, container: "Container") -> "Container":
+        workspace_archive = self._export_workspace(container)
+        container.remove(force=True)
+        self._remove_workspace_volume(assistant_id)
+        recreated = self._create_container(assistant_id, self._container_name(assistant_id))
+        if workspace_archive:
+            ok = recreated.put_archive(WORKSPACE_ROOT, workspace_archive)
+            if not ok:
+                raise RuntimeError(f"put_archive into {WORKSPACE_ROOT} failed")
+        return recreated
+
+    def _export_workspace(self, container: "Container") -> bytes | None:
+        code, output = container.exec_run(["tar", "-C", WORKSPACE_ROOT, "-cf", "-", "."])
+        if code != 0:
+            return None
+        return output
+
+    def _container_needs_recreate(self, container: "Container", assistant_id: str) -> bool:
+        container.reload()
+        attrs = container.attrs or {}
+        mount = next(
+            (m for m in attrs.get("Mounts", []) if m.get("Destination") == WORKSPACE_ROOT),
+            None,
+        )
+        if mount is None:
+            return True
+        if mount.get("Type") != "volume":
+            return True
+        if mount.get("Name") != self._workspace_volume_name(assistant_id):
+            return True
+
+        host_config = attrs.get("HostConfig", {})
+        if _none_to_empty(host_config.get("Dns")) != SANDBOX_DNS_SERVERS:
+            return True
+        if _none_to_empty(host_config.get("DnsSearch")) != SANDBOX_DNS_SEARCH:
+            return True
+        return bool(_none_to_empty(host_config.get("DnsOptions")))
+
+    def _ensure_workspace_volume(self, assistant_id: str) -> None:
+        import docker.errors
+
+        volume_name = self._workspace_volume_name(assistant_id)
+        try:
+            self._client.volumes.get(volume_name)
+        except docker.errors.NotFound:
+            self._client.volumes.create(
+                name=volume_name,
+                labels={
+                    "email-agent.kind": "assistant-workspace",
+                    "email-agent.assistant_id": assistant_id,
+                },
+            )
+
+    def _remove_workspace_volume(self, assistant_id: str) -> None:
+        import docker.errors
+
+        with contextlib.suppress(docker.errors.NotFound, docker.errors.APIError):
+            self._client.volumes.get(self._workspace_volume_name(assistant_id)).remove(force=True)
+
+    @staticmethod
+    def _container_name(assistant_id: str) -> str:
+        return f"{CONTAINER_NAME_PREFIX}{assistant_id}"
+
+    @staticmethod
+    def _workspace_volume_name(assistant_id: str) -> str:
+        return f"{WORKSPACE_VOLUME_PREFIX}{assistant_id}"
 
 
 def _shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
 
-__all__ = ["DockerEnvironmentAdapter", "DockerWorkspaceProvider"]
+def _none_to_empty(value: list[str] | None) -> list[str]:
+    return [] if value is None else value
+
+
+__all__ = [
+    "SANDBOX_DNS_SEARCH",
+    "SANDBOX_DNS_SERVERS",
+    "WORKSPACE_ROOT",
+    "WORKSPACE_VOLUME_PREFIX",
+    "DockerEnvironmentAdapter",
+    "DockerWorkspaceProvider",
+]

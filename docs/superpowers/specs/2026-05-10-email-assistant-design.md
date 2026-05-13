@@ -560,7 +560,7 @@ Per-assistant serialization for `run_agent` jobs via Procrastinate `lock=f"assis
 
 ### Sandbox control plane
 
-Worker container mounts `/var/run/docker.sock`. `DockerWorkspaceProvider` uses the Python `docker` SDK to start and reuse per-assistant containers; `DockerEnvironmentAdapter` performs filesystem and shell operations inside them. Bind-mount sources passed to the docker daemon are **host paths**, so `Settings.sandbox_data_root` (and similar) must be host paths. The docker-compose file mounts `./data` to the same absolute path inside the worker so the path resolves identically on both sides.
+Worker container mounts `/var/run/docker.sock`. `DockerWorkspaceProvider` uses the Python `docker` SDK to start and reuse per-assistant containers; `DockerEnvironmentAdapter` performs filesystem and shell operations inside them. The assistant workspace is mounted at `/workspace` using a Docker named volume, not a host bind mount, so container mount metadata does not expose the host project path. Sandbox containers also set explicit DNS servers and a root DNS search path so `/etc/resolv.conf` does not inherit tailnet resolver details.
 
 Trade-off: docker-socket access is effectively host-root. Acceptable for a single-operator self-hosted MVP. The `InMemoryEnvironment` / `InMemoryWorkspaceProvider` path avoids docker entirely for tests.
 

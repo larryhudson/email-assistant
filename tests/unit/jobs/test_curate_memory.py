@@ -161,7 +161,7 @@ async def test_curate_memory_task_noop_when_memory_disabled() -> None:
         result = await body(assistant_id="a-1", thread_id="t-1", run_id="r-1")
         assert result is None
     finally:
-        jobs_app.build_worker_deps = original  # ty: ignore[invalid-assignment]
+        jobs_app.build_worker_deps = original
 
 
 @pytest.mark.asyncio

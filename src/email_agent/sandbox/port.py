@@ -7,9 +7,9 @@ from email_agent.models.sandbox import ProjectedFile, ToolCall, ToolResult
 class AssistantSandbox(Protocol):
     """Boundary for the per-assistant execution environment.
 
-    `DockerSandbox` (later slice) runs tool calls inside a long-lived
-    container; `InMemorySandbox` (tests) runs them in-process. Every method
-    takes `assistant_id` so isolation is checkable at the seam.
+    Legacy workflow-specific sandbox surface. The active runtime path uses
+    `AssistantWorkspace` plus a `SandboxEnvironment`; this protocol remains
+    for older in-memory tests.
     """
 
     async def ensure_started(self, assistant_id: str) -> None: ...
