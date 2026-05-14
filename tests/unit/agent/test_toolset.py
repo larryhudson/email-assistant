@@ -1,3 +1,4 @@
+import subprocess
 from decimal import Decimal
 
 from pydantic_ai import BinaryContent, ToolReturn
@@ -23,6 +24,7 @@ def _toolset(
     search: InMemorySearchAdapter | None = None,
     pdf_renderer: object | None = None,
     github: object | None = None,
+    github_clone_runner=None,
 ) -> AgentToolset:
     return AgentToolset(
         assistant_id="a-1",
@@ -35,6 +37,7 @@ def _toolset(
         search=search,
         pdf_renderer=pdf_renderer,  # ty: ignore[invalid-argument-type]
         github=github,  # ty: ignore[invalid-argument-type]
+        github_clone_runner=github_clone_runner,
     )
 
 
@@ -267,26 +270,24 @@ async def test_clone_github_repository_rejects_other_owner() -> None:
     assert "owned by larryhudson" in result
 
 
-async def test_clone_github_repository_runs_git_clone_for_owned_repository() -> None:
-    class CloneRecordingEnv(InMemoryEnvironment):
-        def __init__(self) -> None:
-            super().__init__()
-            self.commands: list[str] = []
+async def test_clone_github_repository_clones_on_host_and_projects_files() -> None:
+    calls: list[tuple[str, str]] = []
 
-        async def exec(self, command: str, *, cwd=None, timeout_s=None):
-            from email_agent.sandbox.environment import ShellResult
+    def clone_runner(clone_url, destination):
+        calls.append((clone_url, str(destination)))
+        (destination / "src").mkdir(parents=True)
+        (destination / "src" / "app.py").write_text("print('hello')\n")
+        (destination / ".git").mkdir()
+        (destination / ".git" / "config").write_text("[remote]\n")
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-            self.commands.append(command)
-            return ShellResult(exit_code=0, stdout="", stderr="", duration_ms=1)
+    env = InMemoryEnvironment()
 
-    env = CloneRecordingEnv()
-
-    result = await _toolset(env, github=_FakeGitHub()).clone_github_repository(
-        "larryhudson/email-assistant"
-    )
+    result = await _toolset(
+        env, github=_FakeGitHub(), github_clone_runner=clone_runner
+    ).clone_github_repository("larryhudson/email-assistant")
 
     assert result == "cloned larryhudson/email-assistant into repos/email-assistant"
-    assert env.commands == [
-        "git clone --depth 1 -- "
-        "https://github.com/larryhudson/email-assistant.git repos/email-assistant"
-    ]
+    assert calls[0][0] == "https://github.com/larryhudson/email-assistant.git"
+    assert await env.read_text("repos/email-assistant/src/app.py") == "print('hello')\n"
+    assert not await env.exists("repos/email-assistant/.git/config")

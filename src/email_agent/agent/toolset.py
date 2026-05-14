@@ -1,8 +1,12 @@
+import asyncio
+import os
 import re
-import shlex
+import subprocess
+import tempfile
+from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from pydantic_ai import BinaryContent, ToolReturn
@@ -65,6 +69,7 @@ class AgentToolset:
         scheduled_tasks: _ScheduledTasksLike | None = None,
         pdf_renderer: PdfRenderPort | None = None,
         github: GitHubPort | None = None,
+        github_clone_runner: Callable[[str, Path], subprocess.CompletedProcess[str]] | None = None,
     ) -> None:
         self._assistant_id = assistant_id
         self._run_id = run_id
@@ -77,6 +82,7 @@ class AgentToolset:
         self._scheduled_tasks = scheduled_tasks
         self._pdf_renderer = pdf_renderer
         self._github = github
+        self._github_clone_runner = github_clone_runner or _default_git_clone
 
     async def read(self, path: str) -> str:
         try:
@@ -260,28 +266,22 @@ class AgentToolset:
                 )
             destination = destination_path or f"repos/{repo.name}"
             await self._workspace.assert_agent_write_allowed(destination)
-            command = " ".join(
-                [
-                    "git",
-                    "clone",
-                    "--depth",
-                    "1",
-                    "--",
-                    shlex.quote(repo.clone_url),
-                    shlex.quote(destination),
-                ]
+            result = await _clone_repository_into_workspace(
+                env=self._env,
+                clone_url=repo.clone_url,
+                destination=destination,
+                clone_runner=self._github_clone_runner,
             )
-            result = await self._env.exec(command, timeout_s=120)
         except WorkspacePolicyError as exc:
             return _tool_error(
                 "clone_github_repository", str(exc), detail=destination_path or repo_name
             )
         except Exception as exc:
             return _tool_error("clone_github_repository", str(exc), detail=repository)
-        if result.exit_code != 0:
+        if result.returncode != 0:
             return _tool_error(
                 "clone_github_repository",
-                f"exit_code={result.exit_code}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+                f"exit_code={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}",
                 detail=repo.full_name,
             )
         return f"cloned {repo.full_name} into {destination}"
@@ -401,6 +401,50 @@ def _parse_iso_datetime(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError(f"datetime {value!r} must include a timezone")
     return parsed
+
+
+async def _clone_repository_into_workspace(
+    *,
+    env: SandboxEnvironment,
+    clone_url: str,
+    destination: str,
+    clone_runner: Callable[[str, Path], subprocess.CompletedProcess[str]],
+) -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryDirectory(prefix="email-agent-github-") as tmp:
+        checkout = Path(tmp) / "checkout"
+        result = await asyncio.to_thread(clone_runner, clone_url, checkout)
+        if result.returncode != 0:
+            return result
+
+        for root, dirs, files in os.walk(checkout):
+            if ".git" in dirs:
+                dirs.remove(".git")
+            relative_root = Path(root).relative_to(checkout)
+            target_root = _join_workspace_relative(destination, relative_root)
+            await env.mkdir(target_root, parents=True)
+            for filename in files:
+                source = Path(root) / filename
+                if source.is_symlink():
+                    continue
+                target = _join_workspace_relative(target_root, Path(filename))
+                await env.write_bytes(target, source.read_bytes())
+        return result
+
+
+def _default_git_clone(clone_url: str, destination: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "clone", "--depth", "1", "--", clone_url, str(destination)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+
+def _join_workspace_relative(root: str, path: Path) -> str:
+    if str(path) == ".":
+        return root
+    return str(PurePosixPath(root) / PurePosixPath(path.as_posix()))
 
 
 _REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
