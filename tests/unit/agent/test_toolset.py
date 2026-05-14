@@ -3,6 +3,7 @@ from decimal import Decimal
 from pydantic_ai import BinaryContent, ToolReturn
 
 from email_agent.agent.toolset import AgentToolset
+from email_agent.github.port import GitHubRepository
 from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.agent import MeteredUsage
 from email_agent.models.sandbox import PendingAttachment
@@ -21,6 +22,7 @@ def _toolset(
     metered: list[MeteredUsage] | None = None,
     search: InMemorySearchAdapter | None = None,
     pdf_renderer: object | None = None,
+    github: object | None = None,
 ) -> AgentToolset:
     return AgentToolset(
         assistant_id="a-1",
@@ -32,6 +34,7 @@ def _toolset(
         metered_usage=metered if metered is not None else [],
         search=search,
         pdf_renderer=pdf_renderer,  # ty: ignore[invalid-argument-type]
+        github=github,  # ty: ignore[invalid-argument-type]
     )
 
 
@@ -67,6 +70,27 @@ class _FakePdfRenderer:
             dpi=dpi,
             png_bytes=b"\x89PNG\r\n\x1a\n",
         )
+
+
+class _FakeGitHub:
+    username = "larryhudson"
+
+    def __init__(self) -> None:
+        self.repos = [
+            GitHubRepository(
+                name="email-assistant",
+                full_name="larryhudson/email-assistant",
+                clone_url="https://github.com/larryhudson/email-assistant.git",
+                private=False,
+                description="Email agent",
+            )
+        ]
+
+    async def list_owned_repositories(self):
+        return self.repos
+
+    async def get_owned_repository(self, name: str):
+        return next((repo for repo in self.repos if repo.name == name), None)
 
 
 async def test_read_returns_file_contents() -> None:
@@ -224,4 +248,45 @@ async def test_web_search_runs_on_host_adapter_and_records_metered_usage() -> No
             cost_usd=Decimal("0.0050"),
             tool_name="web_search",
         )
+    ]
+
+
+async def test_list_github_repositories_only_reports_owned_repositories() -> None:
+    result = await _toolset(InMemoryEnvironment(), github=_FakeGitHub()).list_github_repositories()
+
+    assert "Repositories owned by larryhudson" in result
+    assert "email-assistant (public) - Email agent" in result
+
+
+async def test_clone_github_repository_rejects_other_owner() -> None:
+    result = await _toolset(InMemoryEnvironment(), github=_FakeGitHub()).clone_github_repository(
+        "someone-else/email-assistant"
+    )
+
+    assert "ERROR: clone_github_repository(someone-else/email-assistant) failed" in result
+    assert "owned by larryhudson" in result
+
+
+async def test_clone_github_repository_runs_git_clone_for_owned_repository() -> None:
+    class CloneRecordingEnv(InMemoryEnvironment):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+
+        async def exec(self, command: str, *, cwd=None, timeout_s=None):
+            from email_agent.sandbox.environment import ShellResult
+
+            self.commands.append(command)
+            return ShellResult(exit_code=0, stdout="", stderr="", duration_ms=1)
+
+    env = CloneRecordingEnv()
+
+    result = await _toolset(env, github=_FakeGitHub()).clone_github_repository(
+        "larryhudson/email-assistant"
+    )
+
+    assert result == "cloned larryhudson/email-assistant into repos/email-assistant"
+    assert env.commands == [
+        "git clone --depth 1 -- "
+        "https://github.com/larryhudson/email-assistant.git repos/email-assistant"
     ]

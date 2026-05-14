@@ -29,11 +29,11 @@ from email_agent.sandbox.skills import SYSTEM_PROMPT_GUIDANCE
 
 
 class AssistantAgent:
-    """Wraps a PydanticAI `Agent` per-assistant, plus the six tools.
+    """Wraps a PydanticAI `Agent` per-assistant.
 
-    One `Agent` is built lazily per `(model_name, system_prompt, has_memory)`
-    triple and cached for the process lifetime. Tools are registered at
-    build time; per-run state flows through `RunContext[AgentDeps]`.
+    One `Agent` is built lazily per model/prompt/tool configuration and
+    cached for the process lifetime. Tools are registered at build time;
+    per-run state flows through `RunContext[AgentDeps]`.
 
     `has_memory` is constructor-level (not per-run) because the runtime
     composes one `AssistantAgent` for the whole process — flipping memory
@@ -52,12 +52,15 @@ class AssistantAgent:
         self._has_memory = has_memory
         self._has_web_search = has_web_search
         self._use_code_mode = use_code_mode
-        self._agents: dict[tuple[str, str, bool, bool, bool], Agent[AgentDeps, str]] = {}
+        self._agents: dict[
+            tuple[str, str, tuple[str, ...], bool, bool, bool], Agent[AgentDeps, str]
+        ] = {}
 
     def _agent_for(self, scope: AssistantScope) -> Agent[AgentDeps, str]:
         key = (
             scope.model_name,
             scope.system_prompt,
+            self._registered_tools(scope),
             self._has_memory,
             self._has_web_search,
             self._use_code_mode,
@@ -91,65 +94,77 @@ class AssistantAgent:
             ]
             return "\n\n".join(p for p in parts if p)
 
-        @agent.tool
-        async def read(ctx: RunContext[AgentDeps], path: str) -> str:
-            """Read a file inside /workspace and return its text contents."""
-            return await ctx.deps.toolset.read(path)
+        if self._tool_enabled(scope, "read"):
 
-        @agent.tool
-        async def write(ctx: RunContext[AgentDeps], path: str, content: str) -> str:
-            """Write a file inside /workspace. Refuses paths under /workspace/emails/."""
-            return await ctx.deps.toolset.write(path, content)
+            @agent.tool
+            async def read(ctx: RunContext[AgentDeps], path: str) -> str:
+                """Read a file inside /workspace and return its text contents."""
+                return await ctx.deps.toolset.read(path)
 
-        @agent.tool
-        async def edit(ctx: RunContext[AgentDeps], path: str, old: str, new: str) -> str:
-            """Replace the first occurrence of `old` with `new` in `path`."""
-            return await ctx.deps.toolset.edit(path, old, new)
+        if self._tool_enabled(scope, "write"):
 
-        @agent.tool
-        async def attach_file(
-            ctx: RunContext[AgentDeps], path: str, filename: str | None = None
-        ) -> str:
-            """Mark a file in /workspace as an attachment for the outgoing reply.
+            @agent.tool
+            async def write(ctx: RunContext[AgentDeps], path: str, content: str) -> str:
+                """Write a file inside /workspace. Refuses paths under /workspace/emails/."""
+                return await ctx.deps.toolset.write(path, content)
 
-            Validates the file exists in the sandbox; the runtime reads the
-            bytes back out after the run completes and stitches them into the
-            outbound envelope. `filename` defaults to the basename of `path`.
-            """
-            return await ctx.deps.toolset.attach_file(path, filename)
+        if self._tool_enabled(scope, "edit"):
 
-        @agent.tool
-        async def generate_pdf(
-            ctx: RunContext[AgentDeps],
-            html_path: str,
-            output_path: str | None = None,
-        ) -> str:
-            """Render a workspace HTML file to PDF using host-side Prince.
+            @agent.tool
+            async def edit(ctx: RunContext[AgentDeps], path: str, old: str, new: str) -> str:
+                """Replace the first occurrence of `old` with `new` in `path`."""
+                return await ctx.deps.toolset.edit(path, old, new)
 
-            `html_path` should point at an HTML file in /workspace. Relative
-            CSS/images next to that HTML file are staged for rendering.
-            `output_path` defaults to the same path with a .pdf extension.
-            """
-            return await ctx.deps.toolset.generate_pdf(html_path, output_path)
+        if self._tool_enabled(scope, "attach_file"):
 
-        @agent.tool
-        async def preview_pdf(
-            ctx: RunContext[AgentDeps],
-            pdf_path: str,
-            page: int = 1,
-            dpi: int = 160,
-        ) -> ToolReturn | str:
-            """Render one PDF page to a PNG preview and show it to the model."""
-            return await ctx.deps.toolset.preview_pdf(pdf_path, page, dpi)
+            @agent.tool
+            async def attach_file(
+                ctx: RunContext[AgentDeps], path: str, filename: str | None = None
+            ) -> str:
+                """Mark a file in /workspace as an attachment for the outgoing reply.
 
-        if self._has_memory:
+                Validates the file exists in the sandbox; the runtime reads the
+                bytes back out after the run completes and stitches them into the
+                outbound envelope. `filename` defaults to the basename of `path`.
+                """
+                return await ctx.deps.toolset.attach_file(path, filename)
+
+        if self._tool_enabled(scope, "generate_pdf"):
+
+            @agent.tool
+            async def generate_pdf(
+                ctx: RunContext[AgentDeps],
+                html_path: str,
+                output_path: str | None = None,
+            ) -> str:
+                """Render a workspace HTML file to PDF using host-side Prince.
+
+                `html_path` should point at an HTML file in /workspace. Relative
+                CSS/images next to that HTML file are staged for rendering.
+                `output_path` defaults to the same path with a .pdf extension.
+                """
+                return await ctx.deps.toolset.generate_pdf(html_path, output_path)
+
+        if self._tool_enabled(scope, "preview_pdf"):
+
+            @agent.tool
+            async def preview_pdf(
+                ctx: RunContext[AgentDeps],
+                pdf_path: str,
+                page: int = 1,
+                dpi: int = 160,
+            ) -> ToolReturn | str:
+                """Render one PDF page to a PNG preview and show it to the model."""
+                return await ctx.deps.toolset.preview_pdf(pdf_path, page, dpi)
+
+        if self._tool_enabled(scope, "memory_search") and self._has_memory:
 
             @agent.tool
             async def memory_search(ctx: RunContext[AgentDeps], query: str) -> list[Memory] | str:
                 """Search durable memory for the assistant; bypasses the sandbox."""
                 return await ctx.deps.toolset.memory_search(query)
 
-        if self._has_web_search:
+        if self._tool_enabled(scope, "web_search") and self._has_web_search:
 
             @agent.tool
             async def web_search(
@@ -162,40 +177,79 @@ class AssistantAgent:
                 """
                 return await ctx.deps.toolset.web_search(query, max_results)
 
-        @agent.tool
-        async def bash(ctx: RunContext[AgentDeps], command: str) -> str:
-            """Run a bash command in the sandbox; returns combined stdout/stderr."""
-            return await ctx.deps.toolset.bash(command)
+        if self._tool_enabled(scope, "list_github_repositories"):
 
-        @agent.tool
-        async def list_scheduled_tasks(ctx: RunContext[AgentDeps]) -> list[ScheduledTask]:
-            """List scheduled tasks for this assistant (both ONCE and CRON kinds)."""
-            return await ctx.deps.toolset.list_scheduled_tasks()
+            @agent.tool
+            async def list_github_repositories(ctx: RunContext[AgentDeps]) -> str:
+                """List repositories owned by the configured GitHub username."""
+                return await ctx.deps.toolset.list_github_repositories()
 
-        @agent.tool
-        async def create_scheduled_task(
-            ctx: RunContext[AgentDeps],
-            kind: str,
-            when: str,
-            name: str,
-            body: str,
-        ) -> str:
-            """Create a scheduled task that fires a synthetic inbound to this assistant.
+        if self._tool_enabled(scope, "clone_github_repository"):
 
-            `kind` is 'once' or 'cron'. For 'once', `when` is an ISO-8601
-            timezone-aware datetime (e.g. '2026-05-12T09:00:00+10:00'); for
-            'cron', `when` is a 5-field cron expression (e.g. '0 9 * * *').
-            `name` is a short label used as the synthetic inbound's subject;
-            `body` is the prompt the agent will receive when the task fires.
-            """
-            return await ctx.deps.toolset.create_scheduled_task(kind, when, name, body)
+            @agent.tool
+            async def clone_github_repository(
+                ctx: RunContext[AgentDeps],
+                repository: str,
+                destination_path: str | None = None,
+            ) -> str:
+                """Clone one repository owned by the configured GitHub username."""
+                return await ctx.deps.toolset.clone_github_repository(repository, destination_path)
 
-        @agent.tool
-        async def delete_scheduled_task(ctx: RunContext[AgentDeps], task_id: str) -> str:
-            """Delete a scheduled task owned by this assistant by its id."""
-            return await ctx.deps.toolset.delete_scheduled_task(task_id)
+        if self._tool_enabled(scope, "bash"):
+
+            @agent.tool
+            async def bash(ctx: RunContext[AgentDeps], command: str) -> str:
+                """Run a bash command in the sandbox; returns combined stdout/stderr."""
+                return await ctx.deps.toolset.bash(command)
+
+        if self._tool_enabled(scope, "list_scheduled_tasks"):
+
+            @agent.tool
+            async def list_scheduled_tasks(ctx: RunContext[AgentDeps]) -> list[ScheduledTask]:
+                """List scheduled tasks for this assistant (both ONCE and CRON kinds)."""
+                return await ctx.deps.toolset.list_scheduled_tasks()
+
+        if self._tool_enabled(scope, "create_scheduled_task"):
+
+            @agent.tool
+            async def create_scheduled_task(
+                ctx: RunContext[AgentDeps],
+                kind: str,
+                when: str,
+                name: str,
+                body: str,
+            ) -> str:
+                """Create a scheduled task that fires a synthetic inbound to this assistant.
+
+                `kind` is 'once' or 'cron'. For 'once', `when` is an ISO-8601
+                timezone-aware datetime (e.g. '2026-05-12T09:00:00+10:00'); for
+                'cron', `when` is a 5-field cron expression (e.g. '0 9 * * *').
+                `name` is a short label used as the synthetic inbound's subject;
+                `body` is the prompt the agent will receive when the task fires.
+                """
+                return await ctx.deps.toolset.create_scheduled_task(kind, when, name, body)
+
+        if self._tool_enabled(scope, "delete_scheduled_task"):
+
+            @agent.tool
+            async def delete_scheduled_task(ctx: RunContext[AgentDeps], task_id: str) -> str:
+                """Delete a scheduled task owned by this assistant by its id."""
+                return await ctx.deps.toolset.delete_scheduled_task(task_id)
 
         return agent
+
+    def _registered_tools(self, scope: AssistantScope) -> tuple[str, ...]:
+        return tuple(sorted(tool for tool in scope.tool_allowlist if self._tool_available(tool)))
+
+    def _tool_enabled(self, scope: AssistantScope, tool: str) -> bool:
+        return tool in scope.tool_allowlist and self._tool_available(tool)
+
+    def _tool_available(self, tool: str) -> bool:
+        if tool == "memory_search":
+            return self._has_memory
+        if tool == "web_search":
+            return self._has_web_search
+        return True
 
     @contextmanager
     def override_model(self, scope: AssistantScope, model: Model):

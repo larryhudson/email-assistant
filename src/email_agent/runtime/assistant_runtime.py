@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from pydantic_ai.models import Model
 
+    from email_agent.github.port import GitHubPort
     from email_agent.pdf.port import PdfRenderPort
 
 from sqlalchemy import select
@@ -157,6 +158,7 @@ class AssistantRuntime:
         scheduled_tasks: ScheduledTaskService | None = None,
         search: SearchPort | None = None,
         pdf_renderer: "PdfRenderPort | None" = None,
+        github: "GitHubPort | None" = None,
         admin_base_url: str | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -181,6 +183,7 @@ class AssistantRuntime:
         self._scheduled_tasks = scheduled_tasks or ScheduledTaskService(session_factory)
         self._search = search
         self._pdf_renderer = pdf_renderer
+        self._github = github
         self._context_assembler = RunContextAssembler()
         self._admin_base_url = admin_base_url
 
@@ -357,6 +360,7 @@ class AssistantRuntime:
                 search=self._search,
                 scheduled_tasks=self._scheduled_tasks,
                 pdf_renderer=self._pdf_renderer,
+                github=self._github,
             ),
             pending_attachments=pending_attachments,
             metered_usage=metered_usage,

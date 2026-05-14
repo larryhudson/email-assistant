@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     web_search_enabled: bool = True
     brave_search_timeout_seconds: float = 30.0
 
+    github_enabled: bool = False
+    github_username: str | None = None
+    github_token: SecretStr | None = None
+    github_timeout_seconds: float = 30.0
+
     pdf_tools_enabled: bool = True
     prince_path: str = "prince"
     prince_timeout_seconds: float = 30.0

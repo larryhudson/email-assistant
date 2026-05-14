@@ -1,3 +1,5 @@
+import re
+import shlex
 from datetime import datetime
 from decimal import Decimal
 from pathlib import PurePosixPath
@@ -5,6 +7,7 @@ from typing import Protocol
 
 from pydantic_ai import BinaryContent, ToolReturn
 
+from email_agent.github.port import GitHubPort
 from email_agent.models.agent import MeteredUsage
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import PendingAttachment
@@ -61,6 +64,7 @@ class AgentToolset:
         search: SearchPort | None = None,
         scheduled_tasks: _ScheduledTasksLike | None = None,
         pdf_renderer: PdfRenderPort | None = None,
+        github: GitHubPort | None = None,
     ) -> None:
         self._assistant_id = assistant_id
         self._run_id = run_id
@@ -72,6 +76,7 @@ class AgentToolset:
         self._search = search
         self._scheduled_tasks = scheduled_tasks
         self._pdf_renderer = pdf_renderer
+        self._github = github
 
     async def read(self, path: str) -> str:
         try:
@@ -215,6 +220,72 @@ class AgentToolset:
         )
         return _format_search_response(response)
 
+    async def list_github_repositories(self) -> str:
+        if self._github is None:
+            return _tool_error("list_github_repositories", "GitHub is disabled")
+        try:
+            repos = await self._github.list_owned_repositories()
+        except Exception as exc:
+            return _tool_error("list_github_repositories", str(exc))
+        if not repos:
+            return f"No repositories owned by {self._github.username} were found."
+
+        lines = [f"Repositories owned by {self._github.username}:"]
+        for repo in repos:
+            visibility = "private" if repo.private else "public"
+            description = f" - {repo.description}" if repo.description else ""
+            lines.append(f"- {repo.name} ({visibility}){description}")
+        return "\n".join(lines)
+
+    async def clone_github_repository(
+        self, repository: str, destination_path: str | None = None
+    ) -> str:
+        if self._github is None:
+            return _tool_error("clone_github_repository", "GitHub is disabled", detail=repository)
+        repo_name = _normalize_repo_name(repository, self._github.username)
+        if repo_name is None:
+            return _tool_error(
+                "clone_github_repository",
+                f"repository must be owned by {self._github.username} and named like owner/repo or repo",
+                detail=repository,
+            )
+
+        try:
+            repo = await self._github.get_owned_repository(repo_name)
+            if repo is None:
+                return _tool_error(
+                    "clone_github_repository",
+                    f"repository {self._github.username}/{repo_name} not found",
+                    detail=repository,
+                )
+            destination = destination_path or f"repos/{repo.name}"
+            await self._workspace.assert_agent_write_allowed(destination)
+            command = " ".join(
+                [
+                    "git",
+                    "clone",
+                    "--depth",
+                    "1",
+                    "--",
+                    shlex.quote(repo.clone_url),
+                    shlex.quote(destination),
+                ]
+            )
+            result = await self._env.exec(command, timeout_s=120)
+        except WorkspacePolicyError as exc:
+            return _tool_error(
+                "clone_github_repository", str(exc), detail=destination_path or repo_name
+            )
+        except Exception as exc:
+            return _tool_error("clone_github_repository", str(exc), detail=repository)
+        if result.exit_code != 0:
+            return _tool_error(
+                "clone_github_repository",
+                f"exit_code={result.exit_code}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+                detail=repo.full_name,
+            )
+        return f"cloned {repo.full_name} into {destination}"
+
     async def list_scheduled_tasks(self) -> list[ScheduledTask]:
         if self._scheduled_tasks is None:
             return []
@@ -330,6 +401,27 @@ def _parse_iso_datetime(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError(f"datetime {value!r} must include a timezone")
     return parsed
+
+
+_REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _normalize_repo_name(repository: str, username: str) -> str | None:
+    value = repository.strip().removesuffix(".git")
+    if not value:
+        return None
+    if "/" in value:
+        parts = value.split("/")
+        if len(parts) != 2:
+            return None
+        owner, repo = parts
+        if owner.lower() != username.lower():
+            return None
+    else:
+        repo = value
+    if not _REPO_NAME_RE.fullmatch(repo):
+        return None
+    return repo
 
 
 __all__ = ["AgentToolset"]

@@ -58,7 +58,7 @@ async def _seed_assistant(session: AsyncSession) -> None:
         AssistantScopeRow(
             assistant_id="a-1",
             memory_namespace="mum",
-            tool_allowlist=["read"],
+            tool_allowlist=["read", "write", "edit", "bash", "memory_search", "attach_file"],
             budget_id="b-1",
         )
     )

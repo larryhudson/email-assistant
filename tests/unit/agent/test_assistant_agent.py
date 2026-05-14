@@ -11,6 +11,7 @@ from pydantic_ai.models.test import TestModel
 
 from email_agent.agent.assistant_agent import AssistantAgent
 from email_agent.agent.toolset import AgentToolset
+from email_agent.github.port import GitHubRepository
 from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.agent import AgentDeps, MeteredUsage
 from email_agent.models.assistant import AssistantScope, AssistantStatus
@@ -22,7 +23,7 @@ from email_agent.search.inmemory import InMemorySearchAdapter
 from email_agent.search.port import SearchResult
 
 
-def _scope() -> AssistantScope:
+def _scope(tool_allowlist: tuple[str, ...] | None = None) -> AssistantScope:
     return AssistantScope(
         assistant_id="a-1",
         owner_id="o-1",
@@ -33,7 +34,8 @@ def _scope() -> AssistantScope:
         status=AssistantStatus.ACTIVE,
         allowed_senders=("mum@example.com",),
         memory_namespace="mum",
-        tool_allowlist=("read", "write", "edit", "bash", "memory_search", "attach_file"),
+        tool_allowlist=tool_allowlist
+        or ("read", "write", "edit", "bash", "memory_search", "attach_file"),
         budget_id="b-1",
         model_name="test-model",
         system_prompt="be kind",
@@ -51,6 +53,7 @@ def _deps(
     search: InMemorySearchAdapter | None = None,
     metered: list[MeteredUsage] | None = None,
     pdf_renderer: object | None = None,
+    github: object | None = None,
 ) -> AgentDeps:
     actual_env = env or InMemoryEnvironment()
     actual_memory = memory or InMemoryMemoryAdapter()
@@ -71,6 +74,7 @@ def _deps(
             search=search,
             scheduled_tasks=scheduled_tasks,  # ty: ignore[invalid-argument-type]
             pdf_renderer=pdf_renderer,  # ty: ignore[invalid-argument-type]
+            github=github,  # ty: ignore[invalid-argument-type]
         ),
         pending_attachments=actual_pending,
         metered_usage=actual_metered,
@@ -94,6 +98,27 @@ class _FakePdfRenderer:
         raise AssertionError("not used")
 
 
+class _FakeGitHub:
+    username = "larryhudson"
+
+    def __init__(self) -> None:
+        self.repos = [
+            GitHubRepository(
+                name="email-assistant",
+                full_name="larryhudson/email-assistant",
+                clone_url="https://github.com/larryhudson/email-assistant.git",
+                private=False,
+                description="Email agent",
+            )
+        ]
+
+    async def list_owned_repositories(self):
+        return self.repos
+
+    async def get_owned_repository(self, name: str):
+        return next((repo for repo in self.repos if repo.name == name), None)
+
+
 async def test_assistant_agent_returns_text_output() -> None:
     agent = AssistantAgent()
     deps = _deps()
@@ -109,12 +134,13 @@ async def test_generate_pdf_tool_routes_through_toolset_without_code_mode() -> N
     await env.write_text("docs/report.html", "<h1>Report</h1>")
     agent = AssistantAgent(use_code_mode=False)
     deps = _deps(env=env, pdf_renderer=_FakePdfRenderer())
+    scope = _scope(tool_allowlist=("generate_pdf",))
 
     with agent.override_model(
-        _scope(),
+        scope,
         _call_then_echo("generate_pdf", {"html_path": "docs/report.html"}),
     ):
-        result = await agent.run(_scope(), prompt="render pdf", deps=deps)
+        result = await agent.run(scope, prompt="render pdf", deps=deps)
 
     assert "generated docs/report.pdf (9 bytes)" in result.body
     assert await env.read_bytes("docs/report.pdf") == b"%PDF fake"
@@ -584,8 +610,34 @@ async def test_web_search_tool_registered_only_when_enabled() -> None:
     assert "web_search" not in AssistantAgent()._agent_for(_scope())._function_toolset.tools
     assert (
         "web_search"
-        in AssistantAgent(has_web_search=True)._agent_for(_scope())._function_toolset.tools
+        in AssistantAgent(has_web_search=True)
+        ._agent_for(_scope(tool_allowlist=("web_search",)))
+        ._function_toolset.tools
     )
+
+
+async def test_tools_are_registered_from_assistant_allowlist() -> None:
+    built = AssistantAgent(has_web_search=True)._agent_for(
+        _scope(tool_allowlist=("read", "web_search", "clone_github_repository"))
+    )
+    tool_names = set(built._function_toolset.tools.keys())
+    assert "read" in tool_names
+    assert "web_search" in tool_names
+    assert "clone_github_repository" in tool_names
+    assert "write" not in tool_names
+    assert "memory_search" not in tool_names
+
+
+async def test_github_repository_tools_route_through_toolset_without_code_mode() -> None:
+    agent = AssistantAgent(use_code_mode=False)
+    deps = _deps(github=_FakeGitHub())
+    scope = _scope(tool_allowlist=("list_github_repositories",))
+
+    with agent.override_model(scope, _call_then_echo("list_github_repositories", {})):
+        result = await agent.run(scope, prompt="list repos", deps=deps)
+
+    assert "email-assistant" in result.body
+    assert "Email agent" in result.body
 
 
 async def test_run_wraps_underlying_exception_with_partial_usage_and_steps() -> None:
