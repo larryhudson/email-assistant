@@ -88,7 +88,7 @@ class BashkitEnvironment:
                 max_loop_iterations=max_loop_iterations,
                 timeout_seconds=bash_timeout_seconds,
                 python=python_enabled,
-                sqlite=sqlite_enabled,  # ty: ignore[unknown-argument]
+                sqlite=sqlite_enabled,
             )
         )
         self._on_change = on_change

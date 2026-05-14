@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     web_search_enabled: bool = True
     brave_search_timeout_seconds: float = 30.0
 
+    pdf_tools_enabled: bool = True
+    prince_path: str = "prince"
+    prince_timeout_seconds: float = 30.0
+    pdf_preview_max_dpi: int = 220
+    pdf_preview_max_bytes: int = 8_000_000
+
     # Cognee LLM provider — defaults to Fireworks via LiteLLM's "custom"
     # provider so it shares the agent's existing key. Set
     # `COGNEE_LLM_API_KEY=$FIREWORKS_API_KEY` in .env (same value, separate

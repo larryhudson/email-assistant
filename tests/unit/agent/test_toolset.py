@@ -1,9 +1,12 @@
 from decimal import Decimal
 
+from pydantic_ai import BinaryContent, ToolReturn
+
 from email_agent.agent.toolset import AgentToolset
 from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.agent import MeteredUsage
 from email_agent.models.sandbox import PendingAttachment
+from email_agent.pdf.port import PdfGenerationResult, PdfPreviewResult
 from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
 from email_agent.sandbox.workspace import AssistantWorkspace
 from email_agent.search.inmemory import InMemorySearchAdapter
@@ -17,6 +20,7 @@ def _toolset(
     pending: list[PendingAttachment] | None = None,
     metered: list[MeteredUsage] | None = None,
     search: InMemorySearchAdapter | None = None,
+    pdf_renderer: object | None = None,
 ) -> AgentToolset:
     return AgentToolset(
         assistant_id="a-1",
@@ -27,7 +31,42 @@ def _toolset(
         pending_attachments=pending if pending is not None else [],
         metered_usage=metered if metered is not None else [],
         search=search,
+        pdf_renderer=pdf_renderer,  # ty: ignore[invalid-argument-type]
     )
+
+
+class _FakePdfRenderer:
+    def __init__(self) -> None:
+        self.generate_calls: list[tuple[str, str]] = []
+        self.preview_calls: list[tuple[str, int, int]] = []
+
+    async def generate_pdf(
+        self,
+        env,
+        *,
+        html_path: str,
+        output_path: str,
+    ) -> PdfGenerationResult:
+        self.generate_calls.append((html_path, output_path))
+        await env.write_bytes(output_path, b"%PDF fake")
+        return PdfGenerationResult(pdf_path=output_path, size_bytes=9)
+
+    async def preview_pdf(
+        self,
+        env,
+        *,
+        pdf_path: str,
+        page: int = 1,
+        dpi: int = 160,
+    ) -> PdfPreviewResult:
+        self.preview_calls.append((pdf_path, page, dpi))
+        return PdfPreviewResult(
+            pdf_path=pdf_path,
+            page=page,
+            page_count=2,
+            dpi=dpi,
+            png_bytes=b"\x89PNG\r\n\x1a\n",
+        )
 
 
 async def test_read_returns_file_contents() -> None:
@@ -94,6 +133,53 @@ async def test_attach_file_returns_error_for_missing_file() -> None:
 
     assert "ERROR: attach_file(missing.txt) failed" in result
     assert "not found" in result
+
+
+async def test_generate_pdf_renders_html_to_default_pdf_path() -> None:
+    env = InMemoryEnvironment()
+    await env.write_text("docs/report.html", "<h1>Report</h1>")
+    renderer = _FakePdfRenderer()
+
+    result = await _toolset(env, pdf_renderer=renderer).generate_pdf("docs/report.html")
+
+    assert result == "generated docs/report.pdf (9 bytes)"
+    assert renderer.generate_calls == [("docs/report.html", "docs/report.pdf")]
+    assert await env.read_bytes("docs/report.pdf") == b"%PDF fake"
+
+
+async def test_generate_pdf_rejects_readonly_email_output() -> None:
+    env = InMemoryEnvironment()
+    await env.write_text("docs/report.html", "<h1>Report</h1>")
+
+    result = await _toolset(env, pdf_renderer=_FakePdfRenderer()).generate_pdf(
+        "docs/report.html",
+        "emails/report.pdf",
+    )
+
+    assert "ERROR: generate_pdf(emails/report.pdf) failed" in result
+    assert "read-only" in result
+
+
+async def test_preview_pdf_returns_png_tool_content() -> None:
+    env = InMemoryEnvironment()
+    await env.write_bytes("docs/report.pdf", b"%PDF fake")
+    renderer = _FakePdfRenderer()
+
+    result = await _toolset(env, pdf_renderer=renderer).preview_pdf(
+        "docs/report.pdf",
+        page=2,
+        dpi=180,
+    )
+
+    assert isinstance(result, ToolReturn)
+    assert result.return_value == "previewed docs/report.pdf page 2/2 at 180 dpi"
+    assert renderer.preview_calls == [("docs/report.pdf", 2, 180)]
+    assert result.content is not None
+    assert result.content[0] == "previewed docs/report.pdf page 2/2 at 180 dpi"
+    image_content = result.content[1]
+    assert isinstance(image_content, BinaryContent)
+    assert image_content.media_type == "image/png"
+    assert image_content.data == b"\x89PNG\r\n\x1a\n"
 
 
 async def test_memory_search_delegates_by_assistant_id() -> None:

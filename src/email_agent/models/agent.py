@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Protocol
 
+from pydantic_ai import ToolReturn
+
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import PendingAttachment
 from email_agent.models.scheduled import ScheduledTask
@@ -17,6 +19,12 @@ class _ToolsetLike(Protocol):
     async def bash(self, command: str, *, timeout_s: int | None = None) -> str: ...
 
     async def attach_file(self, path: str, filename: str | None = None) -> str: ...
+
+    async def generate_pdf(self, html_path: str, output_path: str | None = None) -> str: ...
+
+    async def preview_pdf(
+        self, pdf_path: str, page: int = 1, dpi: int = 160
+    ) -> ToolReturn | str: ...
 
     async def memory_search(self, query: str) -> list[Memory] | str: ...
 

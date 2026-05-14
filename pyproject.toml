@@ -23,6 +23,7 @@ dependencies = [
     "pydantic-ai-slim[openai]>=1.95.1",
     "pydantic-settings>=2.14.1",
     "python-multipart>=0.0.28",
+    "pymupdf>=1.26.6",
     "sqlalchemy[asyncio]>=2.0.49",
     "typer>=0.25.1",
     "uvicorn[standard]>=0.46.0",

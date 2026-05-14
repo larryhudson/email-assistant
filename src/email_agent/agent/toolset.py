@@ -3,10 +3,13 @@ from decimal import Decimal
 from pathlib import PurePosixPath
 from typing import Protocol
 
+from pydantic_ai import BinaryContent, ToolReturn
+
 from email_agent.models.agent import MeteredUsage
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import PendingAttachment
 from email_agent.models.scheduled import ScheduledTask
+from email_agent.pdf.port import PdfRenderPort
 from email_agent.sandbox.environment import SandboxEnvironment
 from email_agent.sandbox.workspace import AssistantWorkspace, WorkspacePolicyError
 from email_agent.search.port import SearchPort, SearchResponse
@@ -57,6 +60,7 @@ class AgentToolset:
         metered_usage: list[MeteredUsage] | None = None,
         search: SearchPort | None = None,
         scheduled_tasks: _ScheduledTasksLike | None = None,
+        pdf_renderer: PdfRenderPort | None = None,
     ) -> None:
         self._assistant_id = assistant_id
         self._run_id = run_id
@@ -67,6 +71,7 @@ class AgentToolset:
         self._metered_usage = metered_usage if metered_usage is not None else []
         self._search = search
         self._scheduled_tasks = scheduled_tasks
+        self._pdf_renderer = pdf_renderer
 
     async def read(self, path: str) -> str:
         try:
@@ -119,6 +124,68 @@ class AgentToolset:
         except Exception as exc:
             return _tool_error("attach_file", str(exc), detail=path)
         return f"attached {path}"
+
+    async def generate_pdf(self, html_path: str, output_path: str | None = None) -> str:
+        if self._pdf_renderer is None:
+            return _tool_error("generate_pdf", "PDF rendering is disabled", detail=html_path)
+        try:
+            if not html_path.lower().endswith((".html", ".htm")):
+                return _tool_error(
+                    "generate_pdf", "html_path must end in .html or .htm", detail=html_path
+                )
+            if not await self._env.exists(html_path):
+                return _tool_error("generate_pdf", f"not found: {html_path}", detail=html_path)
+            actual_output = output_path or _default_pdf_path(html_path)
+            if not actual_output.lower().endswith(".pdf"):
+                return _tool_error(
+                    "generate_pdf", "output_path must end in .pdf", detail=actual_output
+                )
+            await self._workspace.assert_agent_write_allowed(actual_output)
+            result = await self._pdf_renderer.generate_pdf(
+                self._env,
+                html_path=html_path,
+                output_path=actual_output,
+            )
+        except WorkspacePolicyError as exc:
+            return _tool_error("generate_pdf", str(exc), detail=output_path or html_path)
+        except Exception as exc:
+            return _tool_error("generate_pdf", str(exc), detail=html_path)
+        return f"generated {result.pdf_path} ({result.size_bytes} bytes)"
+
+    async def preview_pdf(self, pdf_path: str, page: int = 1, dpi: int = 160) -> ToolReturn | str:
+        if self._pdf_renderer is None:
+            return _tool_error("preview_pdf", "PDF rendering is disabled", detail=pdf_path)
+        try:
+            if not pdf_path.lower().endswith(".pdf"):
+                return _tool_error("preview_pdf", "pdf_path must end in .pdf", detail=pdf_path)
+            if not await self._env.exists(pdf_path):
+                return _tool_error("preview_pdf", f"not found: {pdf_path}", detail=pdf_path)
+            result = await self._pdf_renderer.preview_pdf(
+                self._env,
+                pdf_path=pdf_path,
+                page=page,
+                dpi=dpi,
+            )
+        except Exception as exc:
+            return _tool_error("preview_pdf", str(exc), detail=pdf_path)
+
+        status = (
+            f"previewed {result.pdf_path} page {result.page}/{result.page_count} "
+            f"at {result.dpi} dpi"
+        )
+        return ToolReturn(
+            return_value=status,
+            content=[
+                status,
+                BinaryContent(data=result.png_bytes, media_type="image/png"),
+            ],
+            metadata={
+                "pdf_path": result.pdf_path,
+                "page": result.page,
+                "page_count": result.page_count,
+                "dpi": result.dpi,
+            },
+        )
 
     async def memory_search(self, query: str) -> list[Memory] | str:
         # Defensive: the agent should not register `memory_search` when memory
@@ -217,6 +284,11 @@ class AgentToolset:
 def _tool_error(tool_name: str, error: str, *, detail: str | None = None) -> str:
     subject = f"{tool_name}({detail})" if detail else tool_name
     return f"ERROR: {subject} failed\n{error or 'unknown error'}"
+
+
+def _default_pdf_path(html_path: str) -> str:
+    path = PurePosixPath(html_path)
+    return str(path.with_suffix(".pdf"))
 
 
 def _format_search_response(response: SearchResponse) -> str:

@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from decimal import Decimal
 
-from pydantic_ai import Agent, RunContext, capture_run_messages
+from pydantic_ai import Agent, RunContext, ToolReturn, capture_run_messages
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -117,6 +117,30 @@ class AssistantAgent:
             outbound envelope. `filename` defaults to the basename of `path`.
             """
             return await ctx.deps.toolset.attach_file(path, filename)
+
+        @agent.tool
+        async def generate_pdf(
+            ctx: RunContext[AgentDeps],
+            html_path: str,
+            output_path: str | None = None,
+        ) -> str:
+            """Render a workspace HTML file to PDF using host-side Prince.
+
+            `html_path` should point at an HTML file in /workspace. Relative
+            CSS/images next to that HTML file are staged for rendering.
+            `output_path` defaults to the same path with a .pdf extension.
+            """
+            return await ctx.deps.toolset.generate_pdf(html_path, output_path)
+
+        @agent.tool
+        async def preview_pdf(
+            ctx: RunContext[AgentDeps],
+            pdf_path: str,
+            page: int = 1,
+            dpi: int = 160,
+        ) -> ToolReturn | str:
+            """Render one PDF page to a PNG preview and show it to the model."""
+            return await ctx.deps.toolset.preview_pdf(pdf_path, page, dpi)
 
         if self._has_memory:
 

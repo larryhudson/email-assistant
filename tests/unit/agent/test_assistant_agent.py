@@ -15,6 +15,7 @@ from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.agent import AgentDeps, MeteredUsage
 from email_agent.models.assistant import AssistantScope, AssistantStatus
 from email_agent.models.sandbox import PendingAttachment
+from email_agent.pdf.port import PdfGenerationResult
 from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
 from email_agent.sandbox.workspace import AssistantWorkspace
 from email_agent.search.inmemory import InMemorySearchAdapter
@@ -49,6 +50,7 @@ def _deps(
     scheduled_tasks: object | None = None,
     search: InMemorySearchAdapter | None = None,
     metered: list[MeteredUsage] | None = None,
+    pdf_renderer: object | None = None,
 ) -> AgentDeps:
     actual_env = env or InMemoryEnvironment()
     actual_memory = memory or InMemoryMemoryAdapter()
@@ -68,12 +70,28 @@ def _deps(
             metered_usage=actual_metered,
             search=search,
             scheduled_tasks=scheduled_tasks,  # ty: ignore[invalid-argument-type]
+            pdf_renderer=pdf_renderer,  # ty: ignore[invalid-argument-type]
         ),
         pending_attachments=actual_pending,
         metered_usage=actual_metered,
         skills_block=skills_block,
         context_block=context_block,
     )
+
+
+class _FakePdfRenderer:
+    async def generate_pdf(
+        self,
+        env,
+        *,
+        html_path: str,
+        output_path: str,
+    ) -> PdfGenerationResult:
+        await env.write_bytes(output_path, b"%PDF fake")
+        return PdfGenerationResult(pdf_path=output_path, size_bytes=9)
+
+    async def preview_pdf(self, env, *, pdf_path: str, page: int = 1, dpi: int = 160):
+        raise AssertionError("not used")
 
 
 async def test_assistant_agent_returns_text_output() -> None:
@@ -84,6 +102,22 @@ async def test_assistant_agent_returns_text_output() -> None:
         result = await agent.run(_scope(), prompt="hi", deps=deps)
 
     assert result.body == "hello back"
+
+
+async def test_generate_pdf_tool_routes_through_toolset_without_code_mode() -> None:
+    env = InMemoryEnvironment()
+    await env.write_text("docs/report.html", "<h1>Report</h1>")
+    agent = AssistantAgent(use_code_mode=False)
+    deps = _deps(env=env, pdf_renderer=_FakePdfRenderer())
+
+    with agent.override_model(
+        _scope(),
+        _call_then_echo("generate_pdf", {"html_path": "docs/report.html"}),
+    ):
+        result = await agent.run(_scope(), prompt="render pdf", deps=deps)
+
+    assert "generated docs/report.pdf (9 bytes)" in result.body
+    assert await env.read_bytes("docs/report.pdf") == b"%PDF fake"
 
 
 def _call_then_echo(tool_name: str, args: dict) -> FunctionModel:

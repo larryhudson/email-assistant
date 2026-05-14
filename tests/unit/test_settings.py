@@ -17,6 +17,8 @@ def test_settings_loads_required_fields(monkeypatch):
     monkeypatch.setenv("COGNEE_LLM_API_KEY", "cog-llm")
     monkeypatch.setenv("COGNEE_EMBEDDING_API_KEY", "cog-emb")
     monkeypatch.delenv("SANDBOX_PROVIDER", raising=False)
+    monkeypatch.delenv("PDF_TOOLS_ENABLED", raising=False)
+    monkeypatch.delenv("PRINCE_PATH", raising=False)
 
     s = Settings(_env_file=None)  # ty: ignore[missing-argument, unknown-argument]
 
@@ -27,6 +29,9 @@ def test_settings_loads_required_fields(monkeypatch):
     assert s.sandbox_provider == "docker"
     assert s.sandbox_run_timeout_seconds == 300
     assert s.admin_bind_port == 8001
+    assert s.pdf_tools_enabled is True
+    assert s.prince_path == "prince"
+    assert s.pdf_preview_max_dpi == 220
 
 
 def test_settings_accepts_bashkit_sandbox_provider(monkeypatch):

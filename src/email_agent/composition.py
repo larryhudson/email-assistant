@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
     from email_agent.mail.port import EmailProvider
     from email_agent.memory.port import MemoryPort
+    from email_agent.pdf.port import PdfRenderPort
     from email_agent.search.port import SearchPort
 
 
@@ -105,6 +106,20 @@ def make_brave_search(settings: Settings) -> "SearchPort | None":
     )
 
 
+def make_pdf_renderer(settings: Settings) -> "PdfRenderPort | None":
+    if not settings.pdf_tools_enabled:
+        return None
+
+    from email_agent.pdf.prince import PrincePdfRenderer
+
+    return PrincePdfRenderer(
+        prince_path=settings.prince_path,
+        timeout_seconds=settings.prince_timeout_seconds,
+        preview_max_dpi=settings.pdf_preview_max_dpi,
+        preview_max_bytes=settings.pdf_preview_max_bytes,
+    )
+
+
 def make_runtime_from_settings(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
@@ -113,6 +128,7 @@ def make_runtime_from_settings(
     workspace_provider: WorkspaceProvider | None = None,
     memory: "MemoryPort | None" = None,
     search: "SearchPort | None" = None,
+    pdf_renderer: "PdfRenderPort | None" = None,
     use_real_model: bool = True,
     use_real_memory: bool = True,
     use_docker_sandbox: bool = True,
@@ -166,6 +182,8 @@ def make_runtime_from_settings(
     # stays None and the runtime/agent skip recall/curate entirely.
     if search is None:
         search = make_brave_search(settings)
+    if pdf_renderer is None:
+        pdf_renderer = make_pdf_renderer(settings)
     projector = EmailWorkspaceProjector(run_inputs_root=settings.run_inputs_root)
 
     settings.attachments_root.mkdir(parents=True, exist_ok=True)
@@ -199,6 +217,7 @@ def make_runtime_from_settings(
         projector=projector,
         recorder=recorder,
         search=search,
+        pdf_renderer=pdf_renderer,
         model_factory=model_factory,
         run_timeout_seconds=run_timeout_seconds,
         run_agent_defer=run_agent_defer,
@@ -256,5 +275,6 @@ __all__ = [
     "make_brave_search",
     "make_cognee_memory",
     "make_fireworks_model_factory",
+    "make_pdf_renderer",
     "make_runtime_from_settings",
 ]
