@@ -11,6 +11,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import Model
 from pydantic_ai.models.test import TestModel
+from pydantic_ai_harness import CodeMode
 
 from email_agent.agent.pricing import estimate_cost_usd
 from email_agent.models.agent import (
@@ -41,13 +42,26 @@ class AssistantAgent:
     differently-configured agents. `has_web_search` follows the same pattern.
     """
 
-    def __init__(self, *, has_memory: bool = True, has_web_search: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        has_memory: bool = True,
+        has_web_search: bool = False,
+        use_code_mode: bool = True,
+    ) -> None:
         self._has_memory = has_memory
         self._has_web_search = has_web_search
-        self._agents: dict[tuple[str, str, bool, bool], Agent[AgentDeps, str]] = {}
+        self._use_code_mode = use_code_mode
+        self._agents: dict[tuple[str, str, bool, bool, bool], Agent[AgentDeps, str]] = {}
 
     def _agent_for(self, scope: AssistantScope) -> Agent[AgentDeps, str]:
-        key = (scope.model_name, scope.system_prompt, self._has_memory, self._has_web_search)
+        key = (
+            scope.model_name,
+            scope.system_prompt,
+            self._has_memory,
+            self._has_web_search,
+            self._use_code_mode,
+        )
         cached = self._agents.get(key)
         if cached is not None:
             return cached
@@ -66,6 +80,7 @@ class AssistantAgent:
             deps_type=AgentDeps,
             output_type=str,
             instructions=[scope.system_prompt, SYSTEM_PROMPT_GUIDANCE],
+            capabilities=[CodeMode()] if self._use_code_mode else None,
         )
 
         @agent.instructions
@@ -191,7 +206,7 @@ class AssistantAgent:
                     steps=partial_steps,
                     metered_usage=partial_metered,
                 ) from exc
-        usage = result.usage()
+        usage = result.usage
         input_tokens = usage.input_tokens or 0
         output_tokens = usage.output_tokens or 0
         cache_read_tokens = getattr(usage, "cache_read_tokens", 0) or 0

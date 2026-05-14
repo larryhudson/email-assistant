@@ -192,6 +192,10 @@ class DockerWorkspaceProvider:
         )
         return AssistantWorkspace(env)
 
+    async def export_workspace_archive(self, assistant_id: str) -> bytes | None:
+        container = await asyncio.to_thread(self._ensure_container_sync, assistant_id)
+        return await asyncio.to_thread(self._export_workspace, container)
+
     def _ensure_container_sync(self, assistant_id: str) -> "Container":
         import docker.errors
 

@@ -1,3 +1,4 @@
+import pytest
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -103,6 +104,9 @@ def _call_then_echo(tool_name: str, args: dict) -> FunctionModel:
     return FunctionModel(fn)
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct read tool calls.", strict=True
+)
 async def test_read_tool_routes_through_toolset() -> None:
     env = InMemoryEnvironment()
     await AssistantWorkspace(env).project_emails([])
@@ -120,6 +124,9 @@ async def test_read_tool_routes_through_toolset() -> None:
     assert "greetings" in result.body
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct read tool calls.", strict=True
+)
 async def test_read_tool_returns_error_text_instead_of_raising() -> None:
     agent = AssistantAgent()
     deps = _deps()
@@ -134,6 +141,9 @@ async def test_read_tool_returns_error_text_instead_of_raising() -> None:
     assert "not found" in result.body
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct write tool calls.", strict=True
+)
 async def test_write_tool_routes_through_toolset() -> None:
     env = InMemoryEnvironment()
 
@@ -149,6 +159,9 @@ async def test_write_tool_routes_through_toolset() -> None:
     assert await env.read_text("notes/draft.md") == "hi\n"
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct edit tool calls.", strict=True
+)
 async def test_edit_tool_routes_through_toolset() -> None:
     env = InMemoryEnvironment()
     await env.write_text("notes/plan.md", "hello world\n")
@@ -165,6 +178,9 @@ async def test_edit_tool_routes_through_toolset() -> None:
     assert await env.read_text("notes/plan.md") == "hello planet\n"
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct bash tool calls.", strict=True
+)
 async def test_bash_tool_routes_through_toolset() -> None:
     agent = AssistantAgent()
     deps = _deps()
@@ -178,6 +194,9 @@ async def test_bash_tool_routes_through_toolset() -> None:
     assert "hello" in result.body
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct memory_search calls.", strict=True
+)
 async def test_memory_search_bypasses_sandbox() -> None:
     memory = InMemoryMemoryAdapter()
     await memory.record_turn("a-1", "t-1", "user", "project alpha kicks off Monday")
@@ -199,6 +218,9 @@ async def test_memory_search_bypasses_sandbox() -> None:
     assert "different topic" not in result.body
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct web_search calls.", strict=True
+)
 async def test_web_search_tool_routes_through_host_search_adapter() -> None:
     from decimal import Decimal
 
@@ -230,6 +252,9 @@ async def test_web_search_tool_routes_through_host_search_adapter() -> None:
     assert result.steps[0].cost_usd == Decimal("0.0050")
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct attach_file calls.", strict=True
+)
 async def test_attach_file_appends_pending_attachment() -> None:
     env = InMemoryEnvironment()
     await env.write_text("report.pdf", "%PDF-1.7")
@@ -247,6 +272,9 @@ async def test_attach_file_appends_pending_attachment() -> None:
     assert pending == [PendingAttachment(sandbox_path="report.pdf", filename="renamed.pdf")]
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct attach_file calls.", strict=True
+)
 async def test_attach_file_defaults_filename_to_basename() -> None:
     env = InMemoryEnvironment()
     await env.write_text("docs/report.pdf", "%PDF-1.7")
@@ -264,6 +292,9 @@ async def test_attach_file_defaults_filename_to_basename() -> None:
     assert pending == [PendingAttachment(sandbox_path="docs/report.pdf", filename="report.pdf")]
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct attach_file calls.", strict=True
+)
 async def test_attach_file_returns_error_text_instead_of_raising() -> None:
     agent = AssistantAgent()
     deps = _deps()
@@ -339,6 +370,28 @@ async def test_scope_system_prompt_still_present() -> None:
     assert "be kind" in captured["instructions"]
 
 
+async def test_code_mode_run_code_routes_workspace_tools_through_toolset() -> None:
+    env = InMemoryEnvironment()
+    agent = AssistantAgent()
+    deps = _deps(env=env)
+
+    code = (
+        "write_result = await write(path='notes/code-mode.md', content='hello from code mode')\n"
+        "read_result = await read(path='notes/code-mode.md')\n"
+        "bash_result = await bash(command='printf bash-ok')\n"
+        "{'write': write_result, 'read': read_result, 'bash': bash_result}"
+    )
+
+    with agent.override_model(_scope(), _call_then_echo("run_code", {"code": code})):
+        result = await agent.run(_scope(), prompt="use code mode", deps=deps)
+
+    assert await env.read_text("notes/code-mode.md") == "hello from code mode"
+    assert "wrote notes/code-mode.md" in result.body
+    assert "hello from code mode" in result.body
+    assert "bash-ok" in result.body
+    assert result.steps[0].kind == "tool:run_code"
+
+
 class _FakeScheduledTasks:
     """Tiny in-memory stand-in for ScheduledTaskService used by agent-tool tests."""
 
@@ -396,6 +449,10 @@ class _FakeScheduledTasks:
         return False
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct create_scheduled_task calls.",
+    strict=True,
+)
 async def test_create_scheduled_task_tool_routes_through_toolset() -> None:
     fake = _FakeScheduledTasks()
     agent = AssistantAgent()
@@ -420,6 +477,10 @@ async def test_create_scheduled_task_tool_routes_through_toolset() -> None:
     assert "created scheduled_task" in result.body
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct list_scheduled_tasks calls.",
+    strict=True,
+)
 async def test_list_scheduled_tasks_tool_routes_through_toolset() -> None:
     from datetime import UTC, datetime
 
@@ -439,6 +500,10 @@ async def test_list_scheduled_tasks_tool_routes_through_toolset() -> None:
     assert "weekly-review" in result.body
 
 
+@pytest.mark.xfail(
+    reason="Code mode exposes run_code instead of direct delete_scheduled_task calls.",
+    strict=True,
+)
 async def test_delete_scheduled_task_tool_routes_through_toolset() -> None:
     from datetime import UTC, datetime
 

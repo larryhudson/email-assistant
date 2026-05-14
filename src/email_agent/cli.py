@@ -426,6 +426,64 @@ def migrate() -> None:
     raise typer.Exit(code)
 
 
+@app.command("migrate-workspace-to-bashkit")
+def migrate_workspace_to_bashkit(
+    assistant_id: str = typer.Argument(..., help="Assistant id, e.g. a-3f5aad0e."),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite an existing Bashkit snapshot for this assistant.",
+    ),
+) -> None:
+    """Import an assistant's Docker `/workspace` into a Bashkit snapshot.
+
+    Docker named volumes are left untouched. Binary files and symlinks are
+    skipped because Bashkit's Python VFS API is currently text-oriented.
+    """
+    asyncio.run(_migrate_workspace_to_bashkit(assistant_id, force=force))
+
+
+async def _migrate_workspace_to_bashkit(assistant_id: str, *, force: bool) -> None:
+    import docker as docker_sdk
+    from email_agent.config import Settings
+    from email_agent.sandbox.bashkit_environment import BashkitEnvironment, BashkitSnapshotStore
+    from email_agent.sandbox.docker_environment import DockerWorkspaceProvider
+
+    settings = Settings()  # ty: ignore[missing-argument]
+    snapshot_store = BashkitSnapshotStore(settings.sandbox_data_root / "bashkit")
+    snapshot_path = snapshot_store.path_for(assistant_id)
+    if snapshot_path.exists() and not force:
+        typer.secho(
+            f"Bashkit snapshot already exists at {snapshot_path}; pass --force to overwrite.",
+            fg="red",
+        )
+        raise typer.Exit(2)
+
+    docker_provider = DockerWorkspaceProvider(
+        client=docker_sdk.from_env(),
+        image=settings.sandbox_image,
+        sandbox_data_root=settings.sandbox_data_root,
+        memory_mb=settings.sandbox_memory_mb,
+        cpu_cores=settings.sandbox_cpu_cores,
+        bash_timeout_seconds=settings.sandbox_bash_timeout_seconds,
+    )
+    archive = await docker_provider.export_workspace_archive(assistant_id)
+    if not archive:
+        typer.secho(f"No Docker workspace archive exported for {assistant_id}.", fg="red")
+        raise typer.Exit(1)
+
+    env = BashkitEnvironment(bash_timeout_seconds=settings.sandbox_bash_timeout_seconds)
+    report = await env.import_workspace_tar(archive)
+    snapshot_store.save(assistant_id, await env.snapshot())
+
+    typer.secho(f"imported Docker workspace into {snapshot_path}", fg="green")
+    typer.echo(
+        f"files={report.files_imported} dirs={report.directories_imported} "
+        f"skipped={report.skipped} binary_skipped={report.binary_files_skipped} "
+        f"symlinks_skipped={report.symlinks_skipped} other_skipped={report.other_entries_skipped}"
+    )
+
+
 @app.command()
 def web(
     host: str = typer.Option(

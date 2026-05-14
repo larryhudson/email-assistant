@@ -121,17 +121,20 @@ def make_runtime_from_settings(
 ) -> AssistantRuntime:
     """Compose a fully-wired AssistantRuntime for production-ish use.
 
-    `workspace_provider` defaults to `DockerWorkspaceProvider`, or to an
-    in-memory provider when `use_docker_sandbox=False`. `memory` defaults to a
-    `CogneeMemoryAdapter` (`use_real_memory=True`), falling back to
-    `InMemoryMemoryAdapter` when the toggle is off — useful for offline
-    iteration without an embedding API key. `use_real_model=False` skips
-    wiring Fireworks so callers can rely on a test override;
+    `workspace_provider` defaults to `settings.sandbox_provider`. Docker is
+    still the default; set `SANDBOX_PROVIDER=bashkit` to try Bashkit, or pass
+    `use_docker_sandbox=False` to force the legacy in-memory test path.
+    `memory` defaults to a `CogneeMemoryAdapter` (`use_real_memory=True`),
+    falling back to `InMemoryMemoryAdapter` when the toggle is off — useful
+    for offline iteration without an embedding API key. `use_real_model=False`
+    skips wiring Fireworks so callers can rely on a test override;
     `use_real_model=True` (default) plumbs through
     `make_fireworks_model_factory(settings)`.
     """
     if workspace_provider is None:
-        if use_docker_sandbox:
+        if not use_docker_sandbox:
+            workspace_provider = InMemoryWorkspaceProvider()
+        elif settings.sandbox_provider == "docker":
             import docker as docker_sdk
             from email_agent.sandbox.docker_environment import DockerWorkspaceProvider
 
@@ -142,6 +145,18 @@ def make_runtime_from_settings(
                 memory_mb=settings.sandbox_memory_mb,
                 cpu_cores=settings.sandbox_cpu_cores,
                 bash_timeout_seconds=settings.sandbox_bash_timeout_seconds,
+            )
+        elif settings.sandbox_provider == "bashkit":
+            from email_agent.sandbox.bashkit_environment import (
+                BashkitSnapshotStore,
+                BashkitWorkspaceProvider,
+            )
+
+            workspace_provider = BashkitWorkspaceProvider(
+                bash_timeout_seconds=settings.sandbox_bash_timeout_seconds,
+                python_enabled=settings.sandbox_bashkit_python_enabled,
+                sqlite_enabled=settings.sandbox_bashkit_sqlite_enabled,
+                snapshot_store=BashkitSnapshotStore(settings.sandbox_data_root / "bashkit"),
             )
         else:
             workspace_provider = InMemoryWorkspaceProvider()

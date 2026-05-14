@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
+    "bashkit>=0.5.0",
     "cognee>=1.0.2",
     "croniter>=6.2.2",
     "docker>=7.1.0",
@@ -18,7 +19,8 @@ dependencies = [
     "procrastinate>=3.8.1",
     "psycopg[binary]>=3.3.4",
     "pydantic>=2.13.4",
-    "pydantic-ai-slim[openai]>=1.93.0",
+    "pydantic-ai-harness[code-mode]>=0.3.0",
+    "pydantic-ai-slim[openai]>=1.95.1",
     "pydantic-settings>=2.14.1",
     "python-multipart>=0.0.28",
     "sqlalchemy[asyncio]>=2.0.49",
