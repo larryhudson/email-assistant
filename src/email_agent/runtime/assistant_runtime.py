@@ -43,6 +43,7 @@ from email_agent.domain.error_envelope import (
     build_owner_error_envelope,
 )
 from email_agent.domain.inbound_persister import persist_inbound
+from email_agent.domain.participants import render_participants_block
 from email_agent.domain.reply_envelope import ReplyEnvelopeBuilder, RunFooterContext
 from email_agent.domain.router import (
     AssistantRouter,
@@ -323,16 +324,26 @@ class AssistantRuntime:
         )
         prompt = prompt_context.prompt
 
+        # Render the participants block from scope so identity (owner +
+        # end-user emails) flows in from data, not from a hardcoded
+        # `system_prompt` string. Stored alongside the other dynamic blocks
+        # in the persisted prompt for admin-UI visibility.
+        participants_block = render_participants_block(
+            owner_email=scope.owner_email,
+            end_user_email=scope.end_user_email,
+        )
+
         # Persist the fully-assembled system prompt + user prompt on the run
         # row so the admin UI can show exactly what the model saw. System
         # order mirrors assistant_agent._build_agent: scope prompt, workspace
-        # guidance, then the dynamic context + skills blocks.
+        # guidance, then the dynamic context + participants + skills blocks.
         full_system_prompt = "\n\n".join(
             part
             for part in [
                 scope.system_prompt.strip(),
                 SYSTEM_PROMPT_GUIDANCE.strip(),
                 context_block.strip(),
+                participants_block.strip(),
                 skills_block.strip(),
             ]
             if part
@@ -366,6 +377,7 @@ class AssistantRuntime:
             metered_usage=metered_usage,
             skills_block=skills_block,
             context_block=context_block,
+            participants_block=participants_block,
         )
 
         # If a model_factory is wired in (production), apply it for the run;

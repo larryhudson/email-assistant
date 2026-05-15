@@ -425,6 +425,43 @@ async def test_owner_inbound_cc_routes_reply_to_owner_with_end_user_cc(
     assert sent.cc_emails == ["mum@example.com"]
 
 
+async def test_execute_run_injects_participants_block_into_system_prompt(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """The runtime renders a participants block from scope.owner_email +
+    scope.end_user_email and persists it as part of the run's system prompt
+    so the model sees both allowed senders and their roles."""
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    email_provider = InMemoryEmailProvider()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    agent = AssistantAgent()
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        workspace_provider=StaticWorkspaceProvider(workspace),
+        memory=InMemoryMemoryAdapter(),
+        agent=agent,
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    with agent.override_model(_scope(), _read_then_reply()):
+        await runtime.execute_run(run_id)
+
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun))).scalar_one()
+        assert run.system_prompt is not None
+        # The seeded owner is owner@example.com and end_user is mum@example.com.
+        assert "# Participants" in run.system_prompt
+        assert "owner@example.com" in run.system_prompt
+        assert "mum@example.com" in run.system_prompt
+
+
 async def test_end_user_inbound_does_not_cc_owner(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,
