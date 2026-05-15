@@ -49,6 +49,7 @@ def _deps(
     pending: list[PendingAttachment] | None = None,
     skills_block: str = "",
     context_block: str = "",
+    participants_block: str = "",
     scheduled_tasks: object | None = None,
     search: InMemorySearchAdapter | None = None,
     metered: list[MeteredUsage] | None = None,
@@ -80,6 +81,7 @@ def _deps(
         metered_usage=actual_metered,
         skills_block=skills_block,
         context_block=context_block,
+        participants_block=participants_block,
     )
 
 
@@ -402,6 +404,29 @@ async def test_skills_block_is_injected_into_instructions() -> None:
 
     assert captured["instructions"] is not None
     assert "triage" in captured["instructions"]
+
+
+async def test_participants_block_is_injected_into_instructions() -> None:
+    """The runtime renders a participants block (owner/end-user emails + roles)
+    from the scope and the agent must include it in its instructions, so
+    identity never has to be hardcoded into the assistant's system prompt."""
+    agent = AssistantAgent()
+    deps = _deps(
+        participants_block=(
+            "# Participants\n\n"
+            "- **end_user (primary):** primary-user@example.com\n"
+            "- **owner (admin):** admin@example.com\n"
+        )
+    )
+
+    model, captured = _capture_instructions()
+    with agent.override_model(_scope(), model):
+        await agent.run(_scope(), prompt="hi", deps=deps)
+
+    assert captured["instructions"] is not None
+    assert "# Participants" in captured["instructions"]
+    assert "primary-user@example.com" in captured["instructions"]
+    assert "admin@example.com" in captured["instructions"]
 
 
 async def test_workspace_guidance_is_part_of_base_instructions() -> None:

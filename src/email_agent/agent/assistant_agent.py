@@ -90,6 +90,7 @@ class AssistantAgent:
         def workspace_context(ctx: RunContext[AgentDeps]) -> str:
             parts = [
                 ctx.deps.context_block.strip(),
+                ctx.deps.participants_block.strip(),
                 ctx.deps.skills_block.strip(),
             ]
             return "\n\n".join(p for p in parts if p)

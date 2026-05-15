@@ -60,6 +60,7 @@ class AgentDeps:
     metered_usage: list["MeteredUsage"] = field(default_factory=list)
     skills_block: str = ""
     context_block: str = ""
+    participants_block: str = ""
 
 
 @dataclass(frozen=True)
