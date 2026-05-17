@@ -171,12 +171,29 @@ async def test_preview_pdf_stays_native_when_code_mode_is_enabled() -> None:
     assert result.steps[0].kind == "tool:preview_pdf"
 
 
-async def test_code_mode_still_wraps_other_tools_when_preview_pdf_is_native() -> None:
+async def test_read_image_stays_native_when_code_mode_is_enabled() -> None:
+    env = InMemoryEnvironment()
+    await env.write_bytes("images/photo.png", b"\x89PNG\r\n\x1a\n")
+    agent = AssistantAgent()
+    deps = _deps(env=env)
+    scope = _scope(tool_allowlist=("read_image", "read"))
+
+    with agent.override_model(
+        scope,
+        _call_then_echo("read_image", {"path": "images/photo.png"}),
+    ):
+        result = await agent.run(scope, prompt="read image", deps=deps)
+
+    assert "read image images/photo.png (image/png, 8 bytes)" in result.body
+    assert result.steps[0].kind == "tool:read_image"
+
+
+async def test_code_mode_still_wraps_other_tools_when_vision_tools_are_native() -> None:
     env = InMemoryEnvironment()
     await env.write_text("notes/source.md", "read through code mode")
     agent = AssistantAgent()
     deps = _deps(env=env, pdf_renderer=_FakePdfRenderer())
-    scope = _scope(tool_allowlist=("preview_pdf", "read"))
+    scope = _scope(tool_allowlist=("preview_pdf", "read_image", "read"))
 
     code = "await read(path='notes/source.md')"
     with agent.override_model(scope, _call_then_echo("run_code", {"code": code})):

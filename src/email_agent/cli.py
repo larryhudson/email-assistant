@@ -398,6 +398,7 @@ async def _seed_assistant(
                 memory_namespace=memory_namespace or assistant_id,
                 tool_allowlist=[
                     "read",
+                    "read_image",
                     "write",
                     "edit",
                     "bash",

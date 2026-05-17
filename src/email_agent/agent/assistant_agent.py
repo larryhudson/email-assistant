@@ -27,7 +27,7 @@ from email_agent.models.memory import Memory
 from email_agent.models.scheduled import ScheduledTask
 from email_agent.sandbox.skills import SYSTEM_PROMPT_GUIDANCE
 
-_NATIVE_WHEN_CODE_MODE_TOOLS = frozenset({"preview_pdf"})
+_NATIVE_WHEN_CODE_MODE_TOOLS = frozenset({"preview_pdf", "read_image"})
 
 
 def _use_tool_in_code_mode(_ctx: RunContext[AgentDeps], tool_def: ToolDefinition) -> bool:
@@ -107,6 +107,13 @@ class AssistantAgent:
             async def read(ctx: RunContext[AgentDeps], path: str) -> str:
                 """Read a file inside /workspace and return its text contents."""
                 return await ctx.deps.toolset.read(path)
+
+        if self._tool_enabled(scope, "read_image"):
+
+            @agent.tool
+            async def read_image(ctx: RunContext[AgentDeps], path: str) -> ToolReturn | str:
+                """Read an image file inside /workspace and show it to the model."""
+                return await ctx.deps.toolset.read_image(path)
 
         if self._tool_enabled(scope, "write"):
 

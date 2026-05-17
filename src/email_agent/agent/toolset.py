@@ -1,4 +1,5 @@
 import asyncio
+import mimetypes
 import os
 import re
 import subprocess
@@ -91,6 +92,31 @@ class AgentToolset:
             return _tool_error("read", f"not found: {path}", detail=path)
         except Exception as exc:
             return _tool_error("read", str(exc), detail=path)
+
+    async def read_image(self, path: str) -> ToolReturn | str:
+        media_type = _guess_image_media_type(path)
+        if media_type is None:
+            return _tool_error("read_image", "unsupported image type", detail=path)
+        try:
+            image_bytes = await self._env.read_bytes(path)
+        except FileNotFoundError:
+            return _tool_error("read_image", f"not found: {path}", detail=path)
+        except Exception as exc:
+            return _tool_error("read_image", str(exc), detail=path)
+
+        status = f"read image {path} ({media_type}, {len(image_bytes)} bytes)"
+        return ToolReturn(
+            return_value=status,
+            content=[
+                status,
+                BinaryContent(data=image_bytes, media_type=media_type),
+            ],
+            metadata={
+                "path": path,
+                "media_type": media_type,
+                "size_bytes": len(image_bytes),
+            },
+        )
 
     async def write(self, path: str, content: str) -> str:
         try:
@@ -360,6 +386,13 @@ def _tool_error(tool_name: str, error: str, *, detail: str | None = None) -> str
 def _default_pdf_path(html_path: str) -> str:
     path = PurePosixPath(html_path)
     return str(path.with_suffix(".pdf"))
+
+
+def _guess_image_media_type(path: str) -> str | None:
+    media_type, _encoding = mimetypes.guess_type(path)
+    if media_type is None or not media_type.startswith("image/"):
+        return None
+    return media_type
 
 
 def _format_search_response(response: SearchResponse) -> str:

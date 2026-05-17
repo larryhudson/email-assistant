@@ -110,6 +110,38 @@ async def test_read_returns_error_text_instead_of_raising() -> None:
     assert "missing.md" in result
 
 
+async def test_read_image_returns_binary_tool_content() -> None:
+    env = InMemoryEnvironment()
+    await env.write_bytes("images/photo.png", b"\x89PNG\r\n\x1a\n")
+
+    result = await _toolset(env).read_image("images/photo.png")
+
+    assert isinstance(result, ToolReturn)
+    assert result.return_value == "read image images/photo.png (image/png, 8 bytes)"
+    assert result.content is not None
+    assert result.content[0] == "read image images/photo.png (image/png, 8 bytes)"
+    image_content = result.content[1]
+    assert isinstance(image_content, BinaryContent)
+    assert image_content.media_type == "image/png"
+    assert image_content.data == b"\x89PNG\r\n\x1a\n"
+    assert result.metadata == {
+        "path": "images/photo.png",
+        "media_type": "image/png",
+        "size_bytes": 8,
+    }
+
+
+async def test_read_image_rejects_non_image_path() -> None:
+    env = InMemoryEnvironment()
+    await env.write_text("notes/not-image.txt", "hello")
+
+    result = await _toolset(env).read_image("notes/not-image.txt")
+
+    assert isinstance(result, str)
+    assert "ERROR: read_image(notes/not-image.txt) failed" in result
+    assert "unsupported image type" in result
+
+
 async def test_write_rejects_emails_directory_and_writes_other_paths() -> None:
     env = InMemoryEnvironment()
     toolset = _toolset(env)
