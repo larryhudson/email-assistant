@@ -16,7 +16,7 @@ from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.agent import AgentDeps, MeteredUsage
 from email_agent.models.assistant import AssistantScope, AssistantStatus
 from email_agent.models.sandbox import PendingAttachment
-from email_agent.pdf.port import PdfGenerationResult
+from email_agent.pdf.port import PdfGenerationResult, PdfPreviewResult
 from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
 from email_agent.sandbox.workspace import AssistantWorkspace
 from email_agent.search.inmemory import InMemorySearchAdapter
@@ -97,7 +97,13 @@ class _FakePdfRenderer:
         return PdfGenerationResult(pdf_path=output_path, size_bytes=9)
 
     async def preview_pdf(self, env, *, pdf_path: str, page: int = 1, dpi: int = 160):
-        raise AssertionError("not used")
+        return PdfPreviewResult(
+            pdf_path=pdf_path,
+            page=page,
+            page_count=2,
+            dpi=dpi,
+            png_bytes=b"fake-png",
+        )
 
 
 class _FakeGitHub:
@@ -146,6 +152,38 @@ async def test_generate_pdf_tool_routes_through_toolset_without_code_mode() -> N
 
     assert "generated docs/report.pdf (9 bytes)" in result.body
     assert await env.read_bytes("docs/report.pdf") == b"%PDF fake"
+
+
+async def test_preview_pdf_stays_native_when_code_mode_is_enabled() -> None:
+    env = InMemoryEnvironment()
+    await env.write_bytes("docs/report.pdf", b"%PDF fake")
+    agent = AssistantAgent()
+    deps = _deps(env=env, pdf_renderer=_FakePdfRenderer())
+    scope = _scope(tool_allowlist=("preview_pdf", "read"))
+
+    with agent.override_model(
+        scope,
+        _call_then_echo("preview_pdf", {"pdf_path": "docs/report.pdf"}),
+    ):
+        result = await agent.run(scope, prompt="preview pdf", deps=deps)
+
+    assert "previewed docs/report.pdf page 1/2 at 160 dpi" in result.body
+    assert result.steps[0].kind == "tool:preview_pdf"
+
+
+async def test_code_mode_still_wraps_other_tools_when_preview_pdf_is_native() -> None:
+    env = InMemoryEnvironment()
+    await env.write_text("notes/source.md", "read through code mode")
+    agent = AssistantAgent()
+    deps = _deps(env=env, pdf_renderer=_FakePdfRenderer())
+    scope = _scope(tool_allowlist=("preview_pdf", "read"))
+
+    code = "await read(path='notes/source.md')"
+    with agent.override_model(scope, _call_then_echo("run_code", {"code": code})):
+        result = await agent.run(scope, prompt="read with code mode", deps=deps)
+
+    assert "read through code mode" in result.body
+    assert result.steps[0].kind == "tool:run_code"
 
 
 def _call_then_echo(tool_name: str, args: dict) -> FunctionModel:

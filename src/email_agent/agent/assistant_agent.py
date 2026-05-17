@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from decimal import Decimal
 
-from pydantic_ai import Agent, RunContext, ToolReturn, capture_run_messages
+from pydantic_ai import Agent, RunContext, ToolDefinition, ToolReturn, capture_run_messages
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -26,6 +26,12 @@ from email_agent.models.assistant import AssistantScope
 from email_agent.models.memory import Memory
 from email_agent.models.scheduled import ScheduledTask
 from email_agent.sandbox.skills import SYSTEM_PROMPT_GUIDANCE
+
+_NATIVE_WHEN_CODE_MODE_TOOLS = frozenset({"preview_pdf"})
+
+
+def _use_tool_in_code_mode(_ctx: RunContext[AgentDeps], tool_def: ToolDefinition) -> bool:
+    return tool_def.name not in _NATIVE_WHEN_CODE_MODE_TOOLS
 
 
 class AssistantAgent:
@@ -83,7 +89,7 @@ class AssistantAgent:
             deps_type=AgentDeps,
             output_type=str,
             instructions=[scope.system_prompt, SYSTEM_PROMPT_GUIDANCE],
-            capabilities=[CodeMode()] if self._use_code_mode else None,
+            capabilities=[CodeMode(tools=_use_tool_in_code_mode)] if self._use_code_mode else None,
         )
 
         @agent.instructions
