@@ -196,6 +196,10 @@ class DockerWorkspaceProvider:
         container = await asyncio.to_thread(self._ensure_container_sync, assistant_id)
         return await asyncio.to_thread(self._export_workspace, container)
 
+    async def import_workspace_archive(self, assistant_id: str, archive: bytes) -> None:
+        container = await asyncio.to_thread(self._ensure_container_sync, assistant_id)
+        await asyncio.to_thread(self._import_workspace, container, archive)
+
     def _ensure_container_sync(self, assistant_id: str) -> "Container":
         import docker.errors
 
@@ -252,6 +256,11 @@ class DockerWorkspaceProvider:
             return None
         return output
 
+    def _import_workspace(self, container: "Container", archive: bytes) -> None:
+        ok = container.put_archive(WORKSPACE_ROOT, archive)
+        if not ok:
+            raise RuntimeError(f"put_archive into {WORKSPACE_ROOT} failed")
+
     def _container_needs_recreate(self, container: "Container", assistant_id: str) -> bool:
         container.reload()
         attrs = container.attrs or {}
@@ -271,7 +280,14 @@ class DockerWorkspaceProvider:
             return True
         if _none_to_empty(host_config.get("DnsSearch")) != SANDBOX_DNS_SEARCH:
             return True
-        return bool(_none_to_empty(host_config.get("DnsOptions")))
+        if _none_to_empty(host_config.get("DnsOptions")):
+            return True
+
+        try:
+            current_image = self._client.images.get(self._image)
+        except Exception:
+            return False
+        return attrs.get("Image") != current_image.id
 
     def _ensure_workspace_volume(self, assistant_id: str) -> None:
         import docker.errors

@@ -7,7 +7,15 @@ RUN apt-get update \
          ripgrep \
          jq \
          poppler-utils \
+         pandoc \
+         libreoffice-writer \
+         unzip \
+         zip \
     && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --no-cache-dir \
+    python-docx==1.2.0 \
+    lxml==6.1.0
 
 WORKDIR /workspace
 

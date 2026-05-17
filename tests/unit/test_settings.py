@@ -32,6 +32,7 @@ def test_settings_loads_required_fields(monkeypatch):
     assert s.pdf_tools_enabled is True
     assert s.prince_path == "prince"
     assert s.pdf_preview_max_dpi == 220
+    assert s.document_tools_enabled is False
 
 
 def test_settings_accepts_bashkit_sandbox_provider(monkeypatch):

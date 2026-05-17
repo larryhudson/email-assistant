@@ -23,6 +23,7 @@ from email_agent.sandbox.workspace_provider import InMemoryWorkspaceProvider, Wo
 if TYPE_CHECKING:
     from pydantic_ai.models import Model
 
+    from email_agent.document.port import DocumentToolsPort
     from email_agent.github.port import GitHubPort
     from email_agent.mail.port import EmailProvider
     from email_agent.memory.port import MemoryPort
@@ -121,6 +122,19 @@ def make_pdf_renderer(settings: Settings) -> "PdfRenderPort | None":
     )
 
 
+def make_document_tools(settings: Settings) -> "DocumentToolsPort | None":
+    if not settings.document_tools_enabled:
+        return None
+
+    from email_agent.document.host import HostDocumentTools
+
+    return HostDocumentTools(
+        pandoc_path=settings.pandoc_path,
+        soffice_path=settings.soffice_path,
+        timeout_seconds=settings.document_tools_timeout_seconds,
+    )
+
+
 def make_github(settings: Settings) -> "GitHubPort | None":
     if not settings.github_enabled or not settings.github_username:
         return None
@@ -143,6 +157,7 @@ def make_runtime_from_settings(
     memory: "MemoryPort | None" = None,
     search: "SearchPort | None" = None,
     pdf_renderer: "PdfRenderPort | None" = None,
+    document_tools: "DocumentToolsPort | None" = None,
     github: "GitHubPort | None" = None,
     use_real_model: bool = True,
     use_real_memory: bool = True,
@@ -199,6 +214,8 @@ def make_runtime_from_settings(
         search = make_brave_search(settings)
     if pdf_renderer is None:
         pdf_renderer = make_pdf_renderer(settings)
+    if document_tools is None:
+        document_tools = make_document_tools(settings)
     if github is None:
         github = make_github(settings)
     projector = EmailWorkspaceProjector(run_inputs_root=settings.run_inputs_root)
@@ -230,11 +247,16 @@ def make_runtime_from_settings(
         email_provider=email_provider,
         workspace_provider=workspace_provider,
         memory=memory,
-        agent=AssistantAgent(has_memory=memory is not None, has_web_search=search is not None),
+        agent=AssistantAgent(
+            has_memory=memory is not None,
+            has_web_search=search is not None,
+            has_document_tools=document_tools is not None,
+        ),
         projector=projector,
         recorder=recorder,
         search=search,
         pdf_renderer=pdf_renderer,
+        document_tools=document_tools,
         github=github,
         model_factory=model_factory,
         run_timeout_seconds=run_timeout_seconds,

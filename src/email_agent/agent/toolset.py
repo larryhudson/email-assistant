@@ -12,6 +12,7 @@ from typing import Protocol
 
 from pydantic_ai import BinaryContent, ToolReturn
 
+from email_agent.document.port import DocumentToolsPort
 from email_agent.github.port import GitHubPort
 from email_agent.models.agent import MeteredUsage
 from email_agent.models.memory import Memory
@@ -69,6 +70,7 @@ class AgentToolset:
         search: SearchPort | None = None,
         scheduled_tasks: _ScheduledTasksLike | None = None,
         pdf_renderer: PdfRenderPort | None = None,
+        document_tools: DocumentToolsPort | None = None,
         github: GitHubPort | None = None,
         github_clone_runner: Callable[[str, Path], subprocess.CompletedProcess[str]] | None = None,
     ) -> None:
@@ -82,6 +84,7 @@ class AgentToolset:
         self._search = search
         self._scheduled_tasks = scheduled_tasks
         self._pdf_renderer = pdf_renderer
+        self._document_tools = document_tools
         self._github = github
         self._github_clone_runner = github_clone_runner or _default_git_clone
 
@@ -223,6 +226,76 @@ class AgentToolset:
                 "dpi": result.dpi,
             },
         )
+
+    async def pandoc(
+        self,
+        args: list[str],
+        input_paths: list[str],
+        output_paths: list[str],
+        timeout_s: int | None = None,
+    ) -> str:
+        if self._document_tools is None:
+            return _tool_error("pandoc", "document tools are disabled")
+        try:
+            for output_path in output_paths:
+                await self._workspace.assert_agent_write_allowed(output_path)
+            return await self._document_tools.pandoc(
+                self._env,
+                args=args,
+                input_paths=input_paths,
+                output_paths=output_paths,
+                timeout_s=timeout_s,
+            )
+        except WorkspacePolicyError as exc:
+            return _tool_error("pandoc", str(exc))
+        except Exception as exc:
+            return _tool_error("pandoc", str(exc))
+
+    async def soffice(
+        self,
+        args: list[str],
+        input_paths: list[str],
+        output_paths: list[str],
+        timeout_s: int | None = None,
+    ) -> str:
+        if self._document_tools is None:
+            return _tool_error("soffice", "document tools are disabled")
+        try:
+            for output_path in output_paths:
+                await self._workspace.assert_agent_write_allowed(output_path)
+            return await self._document_tools.soffice(
+                self._env,
+                args=args,
+                input_paths=input_paths,
+                output_paths=output_paths,
+                timeout_s=timeout_s,
+            )
+        except WorkspacePolicyError as exc:
+            return _tool_error("soffice", str(exc))
+        except Exception as exc:
+            return _tool_error("soffice", str(exc))
+
+    async def python_docx(
+        self,
+        path: str,
+        operations: list[dict],
+        output_path: str | None = None,
+    ) -> str:
+        if self._document_tools is None:
+            return _tool_error("python_docx", "document tools are disabled", detail=path)
+        actual_output = output_path or path
+        try:
+            await self._workspace.assert_agent_write_allowed(actual_output)
+            return await self._document_tools.python_docx(
+                self._env,
+                path=path,
+                operations=operations,
+                output_path=output_path,
+            )
+        except WorkspacePolicyError as exc:
+            return _tool_error("python_docx", str(exc), detail=actual_output)
+        except Exception as exc:
+            return _tool_error("python_docx", str(exc), detail=path)
 
     async def memory_search(self, query: str) -> list[Memory] | str:
         # Defensive: the agent should not register `memory_search` when memory

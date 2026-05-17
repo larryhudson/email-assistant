@@ -113,6 +113,24 @@ async def test_workspace_remains_writable_and_rootfs_allows_tool_install_shape(
     assert result.exit_code == 0
 
 
+async def test_workspace_provider_can_import_archive(workspace_provider, assistant_id: str):
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        content = b"migrated\n"
+        info = tarfile.TarInfo("notes/migrated.md")
+        info.size = len(content)
+        tar.addfile(info, io.BytesIO(content))
+    buf.seek(0)
+
+    await workspace_provider.import_workspace_archive(assistant_id, buf.getvalue())
+    workspace = await workspace_provider.get_workspace(assistant_id)
+
+    assert await workspace.environment.read_text("notes/migrated.md") == "migrated\n"
+
+
 async def test_stale_bind_mount_container_is_recreated_with_named_volume(
     tmp_path, assistant_id: str
 ):

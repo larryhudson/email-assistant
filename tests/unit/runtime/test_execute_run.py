@@ -1156,10 +1156,6 @@ async def test_curate_defer_not_scheduled_when_memory_disabled_in_composition(
     assert runtime._recorder._curate_memory_defer is None
 
 
-@pytest.mark.xfail(
-    reason="TestModel's default tool script now targets run_code under code mode.",
-    strict=True,
-)
 async def test_execute_run_notifies_on_failure_after_agent_succeeded(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,

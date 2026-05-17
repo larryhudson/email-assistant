@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from pydantic_ai.models import Model
 
+    from email_agent.document.port import DocumentToolsPort
     from email_agent.github.port import GitHubPort
     from email_agent.pdf.port import PdfRenderPort
 
@@ -159,6 +160,7 @@ class AssistantRuntime:
         scheduled_tasks: ScheduledTaskService | None = None,
         search: SearchPort | None = None,
         pdf_renderer: "PdfRenderPort | None" = None,
+        document_tools: "DocumentToolsPort | None" = None,
         github: "GitHubPort | None" = None,
         admin_base_url: str | None = None,
     ) -> None:
@@ -184,6 +186,7 @@ class AssistantRuntime:
         self._scheduled_tasks = scheduled_tasks or ScheduledTaskService(session_factory)
         self._search = search
         self._pdf_renderer = pdf_renderer
+        self._document_tools = document_tools
         self._github = github
         self._context_assembler = RunContextAssembler()
         self._admin_base_url = admin_base_url
@@ -261,6 +264,7 @@ class AssistantRuntime:
             messages,
             attachments,
         ) = await self._load_run(run_id)
+        await self._recorder.mark_running(run_id)
         workspace = await self._workspace_provider.get_workspace(scope.assistant_id)
         inbound_email = _inbound_email_from_message(inbound)
 
@@ -370,10 +374,12 @@ class AssistantRuntime:
                 search=self._search,
                 scheduled_tasks=self._scheduled_tasks,
                 pdf_renderer=self._pdf_renderer,
+                document_tools=self._document_tools,
                 github=self._github,
             ),
             pending_attachments=pending_attachments,
             metered_usage=metered_usage,
+            record_step=lambda step: self._recorder.record_step(run_id, step),
             skills_block=skills_block,
             context_block=context_block,
             participants_block=participants_block,
@@ -522,7 +528,7 @@ class AssistantRuntime:
             _log.exception("failed to load run %s while recording unhandled failure", run_id)
             return
 
-        if run.status != "queued":
+        if run.status not in {"queued", "running"}:
             return
 
         await self._recorder.record_failure(run_id, error=str(exception))

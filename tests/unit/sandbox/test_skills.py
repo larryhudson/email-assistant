@@ -74,11 +74,28 @@ async def test_ensure_starter_files_creates_context_and_writing_skill_once() -> 
     assert await env.exists("/workspace/skills/writing-skills/SKILL.md")
     assert await env.exists("/workspace/skills/managing-context/SKILL.md")
     assert await env.exists("/workspace/skills/scheduling-tasks/SKILL.md")
+    assert await env.exists("/workspace/skills/editing-word-documents/SKILL.md")
 
     # Idempotent: customising and re-running must not overwrite user edits.
     await env.write_text("/workspace/CONTEXT.md", "custom content")
     await ensure_starter_files(env)
     assert await env.read_text("/workspace/CONTEXT.md") == "custom content"
+
+
+async def test_ensure_starter_files_refreshes_document_skill() -> None:
+    env = InMemoryEnvironment()
+    await ensure_starter_files(env)
+    await env.write_text(
+        "/workspace/skills/editing-word-documents/SKILL.md",
+        "old tool-based document skill",
+    )
+
+    await ensure_starter_files(env)
+
+    body = await env.read_text("/workspace/skills/editing-word-documents/SKILL.md")
+    assert "normal Linux/Python environment" in body
+    assert "python3 /workspace/scripts/fix_margins.py" in body
+    assert "old tool-based document skill" not in body
 
 
 async def test_scheduling_tasks_starter_skill_shows_in_rendered_manifest() -> None:
@@ -93,6 +110,21 @@ async def test_scheduling_tasks_starter_skill_shows_in_rendered_manifest() -> No
     assert "/workspace/skills/scheduling-tasks/SKILL.md" in rendered
     # The description hint that nudges the agent toward the right tools.
     assert "synthetic inbound" in rendered.lower() or "reminder" in rendered.lower()
+
+
+async def test_editing_word_documents_starter_skill_shows_tool_guidance() -> None:
+    env = InMemoryEnvironment()
+    await ensure_starter_files(env)
+
+    rendered = render_skills_block(await load_skills(env))
+    body = await env.read_text("/workspace/skills/editing-word-documents/SKILL.md")
+
+    assert "editing-word-documents" in rendered
+    assert "/workspace/skills/editing-word-documents/SKILL.md" in rendered
+    assert "pandoc" in rendered
+    assert "fix_margins" in body
+    assert "python3 /workspace/scripts/fix_margins.py" in body
+    assert "soffice --headless" in body
 
 
 async def test_skill_written_during_one_run_is_visible_to_next_load() -> None:
@@ -148,4 +180,9 @@ async def test_workspace_proxies_skills_and_context() -> None:
 
     assert await workspace.read_context() is not None
     skill_names = {s.name for s in await workspace.load_skills()}
-    assert {"writing-skills", "managing-context", "scheduling-tasks"} <= skill_names
+    assert {
+        "writing-skills",
+        "managing-context",
+        "scheduling-tasks",
+        "editing-word-documents",
+    } <= skill_names

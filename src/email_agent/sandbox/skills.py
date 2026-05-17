@@ -75,6 +75,10 @@ async def ensure_starter_files(env: SandboxEnvironment) -> None:
         await env.mkdir(f"{SKILLS_DIR}/scheduling-tasks", parents=True)
         await env.write_text(scheduling_skill, _STARTER_SKILL_SCHEDULING_TASKS)
 
+    document_skill = f"{SKILLS_DIR}/editing-word-documents/SKILL.md"
+    await env.mkdir(f"{SKILLS_DIR}/editing-word-documents", parents=True)
+    await env.write_text(document_skill, _STARTER_SKILL_EDITING_WORD_DOCUMENTS)
+
 
 def render_skills_block(skills: list[Skill]) -> str:
     if not skills:
@@ -288,6 +292,196 @@ create_scheduled_task(
   will fire (in their local time).
 - Don't stack duplicates — `list_scheduled_tasks` first if the user might
   already have a similar task.
+"""
+
+
+_STARTER_SKILL_EDITING_WORD_DOCUMENTS = """---
+name: editing-word-documents
+description: Read, edit, preview, and attach Word/Office documents using installed sandbox tools like pandoc, LibreOffice, and python-docx.
+---
+
+# Editing Word and Office documents
+
+Use this skill when the user sends or asks for a Word/Office document
+(`.docx`, `.doc`, `.odt`, `.rtf`) and wants you to read it, polish wording,
+adjust layout/margins, convert it, preview it, or send back an edited file.
+
+The sandbox is a normal Linux/Python environment with document dependencies
+installed. Use `bash`, `write`, and `read` to run scripts and commands inside
+`/workspace`.
+
+Important workspace rule: email history and inbound attachments under
+`/workspace/emails/` are read-only. Always write edited outputs somewhere like
+`/workspace/docs/`, `/workspace/previews/`, or `/workspace/scripts/`.
+
+## Installed capabilities
+
+- `pandoc` — best for extracting readable text/Markdown/HTML from documents,
+  or creating a fresh document from Markdown/HTML. It is not ideal for
+  preserving exact layout when round-tripping an existing Word file.
+- `soffice` / LibreOffice — best for DOCX/PDF/ODT conversion and producing a
+  PDF preview of a Word document.
+- Python package `docx` (`python-docx`) — best for targeted DOCX edits that
+  should preserve most of the existing file structure, such as margins,
+  orientation, and simple text replacements.
+- `preview_pdf(pdf_path, page=1, dpi=160)` — tool that renders a PDF page as
+  an image so you can visually inspect layout.
+- `attach_file(path, filename=None)` — tool that includes the finished file in
+  your reply.
+
+## Common commands
+
+Create working folders first:
+
+```
+bash("mkdir -p /workspace/docs /workspace/previews /workspace/scripts")
+```
+
+Read a Word attachment as Markdown:
+
+```
+bash(
+    'pandoc "/workspace/emails/<thread>/attachments/0001-brochure.docx" '
+    '-t markdown -o /workspace/docs/brochure.md'
+)
+read("docs/brochure.md")
+```
+
+Convert a Word document to PDF for preview:
+
+```
+bash(
+    'soffice --headless --convert-to pdf --outdir /workspace/previews '
+    '"/workspace/docs/brochure-fixed.docx"'
+)
+preview_pdf("previews/brochure-fixed.pdf", page=1)
+```
+
+If `pandoc` or `soffice` is missing or fails, do not retry the same command
+repeatedly. Report the tool failure and suggest what dependency or file issue
+needs fixing.
+
+## Python DOCX editing patterns
+
+Set all margins, in inches:
+
+```
+write(
+    "scripts/fix_margins.py",
+    '''
+from docx import Document
+from docx.shared import Inches
+
+source = "/workspace/emails/<thread>/attachments/0001-brochure.docx"
+target = "/workspace/docs/brochure-fixed.docx"
+
+doc = Document(source)
+for section in doc.sections:
+    section.top_margin = Inches(0.7)
+    section.right_margin = Inches(0.7)
+    section.bottom_margin = Inches(0.7)
+    section.left_margin = Inches(0.7)
+doc.save(target)
+print(target)
+''',
+)
+bash("python3 /workspace/scripts/fix_margins.py")
+```
+
+Set individual margins, in inches:
+
+```
+write(
+    "scripts/fix_margins.py",
+    '''
+from docx import Document
+from docx.shared import Inches
+
+doc = Document("/workspace/docs/brochure.docx")
+for section in doc.sections:
+    section.top_margin = Inches(0.7)
+    section.right_margin = Inches(0.65)
+    section.bottom_margin = Inches(0.7)
+    section.left_margin = Inches(0.65)
+doc.save("/workspace/docs/brochure-fixed.docx")
+''',
+)
+bash("python3 /workspace/scripts/fix_margins.py")
+```
+
+Change every section's orientation:
+
+```
+write(
+    "scripts/landscape.py",
+    '''
+from docx import Document
+from docx.enum.section import WD_ORIENT
+
+doc = Document("/workspace/docs/brochure.docx")
+for section in doc.sections:
+    if section.orientation != WD_ORIENT.LANDSCAPE:
+        section.orientation = WD_ORIENT.LANDSCAPE
+        section.page_width, section.page_height = section.page_height, section.page_width
+doc.save("/workspace/docs/brochure-landscape.docx")
+''',
+)
+bash("python3 /workspace/scripts/landscape.py")
+```
+
+Replace simple text:
+
+```
+write(
+    "scripts/replace_text.py",
+    '''
+from docx import Document
+
+old = "Materials services"
+new = "Materials and specialist services"
+
+doc = Document("/workspace/docs/brochure.docx")
+for paragraph in doc.paragraphs:
+    for run in paragraph.runs:
+        if old in run.text:
+            run.text = run.text.replace(old, new)
+for table in doc.tables:
+    for row in table.rows:
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                for run in paragraph.runs:
+                    if old in run.text:
+                        run.text = run.text.replace(old, new)
+doc.save("/workspace/docs/brochure-polished.docx")
+''',
+)
+bash("python3 /workspace/scripts/replace_text.py")
+```
+
+Text replacement works best when the old text is inside one Word run. If a
+phrase is split across styling runs, extract the text with `pandoc`, draft the
+improved wording, and ask the user whether to rebuild the document or make
+manual targeted edits.
+
+## Suggested workflow for a brochure request
+
+1. Read the latest email and identify the relevant attachment path.
+2. Extract text with `pandoc` to understand the content.
+3. For layout-only fixes, use `python-docx` in a script to edit the original
+   DOCX into `/workspace/docs/...`.
+4. Convert the edited DOCX to PDF with `soffice`.
+5. Use `preview_pdf` to inspect one or more pages.
+6. Attach the edited DOCX and optionally the PDF preview if useful.
+
+```
+bash("mkdir -p /workspace/docs /workspace/previews /workspace/scripts")
+bash('pandoc "/workspace/emails/<thread>/attachments/0001-brochure.docx" -t markdown -o /workspace/docs/brochure.md')
+read("docs/brochure.md")
+# write and run a python-docx script to create /workspace/docs/brochure-fixed.docx
+bash('soffice --headless --convert-to pdf --outdir /workspace/previews "/workspace/docs/brochure-fixed.docx"')
+preview_pdf("previews/brochure-fixed.pdf", page=1)
+attach_file("docs/brochure-fixed.docx")
+```
 """
 
 

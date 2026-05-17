@@ -143,6 +143,40 @@ async def test_import_workspace_tar_imports_text_and_reports_skipped_binary() ->
     assert not await env.exists("bin/blob.dat")
 
 
+async def test_export_workspace_tar_exports_persisted_workspace_without_email_mounts(
+    tmp_path,
+) -> None:
+    source = tmp_path / "emails"
+    source.mkdir()
+    (source / "message.md").write_text("mounted")
+    env = BashkitEnvironment()
+    workspace = AssistantWorkspace(env)
+    await workspace.project_email_directory(source)
+    await env.write_text("notes/a.md", "hello")
+
+    archive = await env.export_workspace_tar()
+
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r") as tar:
+        names = set(tar.getnames())
+        extracted = tar.extractfile("./notes/a.md")
+        assert extracted is not None
+        assert extracted.read() == b"hello"
+
+    assert "./notes/a.md" in names
+    assert "./emails/message.md" not in names
+
+
+async def test_export_workspace_tar_skips_binary_files_from_snapshot() -> None:
+    env = BashkitEnvironment()
+    await env.write_bytes("images/photo.png", b"\x89PNG\r\n\x1a\n\xff\x00")
+    restored = BashkitEnvironment(snapshot=await env.snapshot())
+
+    archive = await restored.export_workspace_tar()
+
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r") as tar:
+        assert "./images/photo.png" not in tar.getnames()
+
+
 async def test_project_email_directory_mounts_large_host_files_read_only(tmp_path) -> None:
     source = tmp_path / "emails"
     attachment_dir = source / "thread" / "attachments"

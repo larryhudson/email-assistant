@@ -53,7 +53,9 @@ def _deps(
     scheduled_tasks: object | None = None,
     search: InMemorySearchAdapter | None = None,
     metered: list[MeteredUsage] | None = None,
+    record_step=None,
     pdf_renderer: object | None = None,
+    document_tools: object | None = None,
     github: object | None = None,
 ) -> AgentDeps:
     actual_env = env or InMemoryEnvironment()
@@ -75,10 +77,12 @@ def _deps(
             search=search,
             scheduled_tasks=scheduled_tasks,  # ty: ignore[invalid-argument-type]
             pdf_renderer=pdf_renderer,  # ty: ignore[invalid-argument-type]
+            document_tools=document_tools,  # ty: ignore[invalid-argument-type]
             github=github,  # ty: ignore[invalid-argument-type]
         ),
         pending_attachments=actual_pending,
         metered_usage=actual_metered,
+        record_step=record_step,
         skills_block=skills_block,
         context_block=context_block,
         participants_block=participants_block,
@@ -104,6 +108,23 @@ class _FakePdfRenderer:
             dpi=dpi,
             png_bytes=b"fake-png",
         )
+
+
+class _FakeDocumentTools:
+    async def pandoc(self, env, **kwargs) -> str:
+        for path in kwargs["output_paths"]:
+            await env.write_bytes(path, b"pandoc output")
+        return "exit_code=0\noutputs:\n- docs/out.md"
+
+    async def soffice(self, env, **kwargs) -> str:
+        for path in kwargs["output_paths"]:
+            await env.write_bytes(path, b"soffice output")
+        return "exit_code=0\noutputs:\n- docs/out.pdf"
+
+    async def python_docx(self, env, **kwargs) -> str:
+        output = kwargs.get("output_path") or kwargs["path"]
+        await env.write_bytes(output, b"docx output")
+        return f"wrote {output}"
 
 
 class _FakeGitHub:
@@ -140,7 +161,7 @@ async def test_assistant_agent_returns_text_output() -> None:
 async def test_generate_pdf_tool_routes_through_toolset_without_code_mode() -> None:
     env = InMemoryEnvironment()
     await env.write_text("docs/report.html", "<h1>Report</h1>")
-    agent = AssistantAgent(use_code_mode=False)
+    agent = AssistantAgent(has_document_tools=True, use_code_mode=False)
     deps = _deps(env=env, pdf_renderer=_FakePdfRenderer())
     scope = _scope(tool_allowlist=("generate_pdf",))
 
@@ -186,6 +207,41 @@ async def test_read_image_stays_native_when_code_mode_is_enabled() -> None:
 
     assert "read image images/photo.png (image/png, 8 bytes)" in result.body
     assert result.steps[0].kind == "tool:read_image"
+
+
+async def test_document_tools_route_through_toolset_without_code_mode() -> None:
+    env = InMemoryEnvironment()
+    await env.write_bytes("docs/in.docx", b"docx")
+    agent = AssistantAgent(has_document_tools=True, use_code_mode=False)
+    deps = _deps(env=env, document_tools=_FakeDocumentTools())
+    scope = _scope(tool_allowlist=("pandoc", "python_docx", "soffice"))
+
+    with agent.override_model(
+        scope,
+        _call_then_echo(
+            "python_docx",
+            {
+                "path": "docs/in.docx",
+                "operations": [{"action": "set_margins", "all": 0.7}],
+                "output_path": "docs/out.docx",
+            },
+        ),
+    ):
+        result = await agent.run(scope, prompt="fix margins", deps=deps)
+
+    assert "wrote docs/out.docx" in result.body
+    assert await env.read_bytes("docs/out.docx") == b"docx output"
+
+
+async def test_document_tools_not_registered_unless_enabled() -> None:
+    agent = AssistantAgent()
+    built = agent._agent_for(_scope(tool_allowlist=("pandoc", "python_docx", "soffice", "read")))
+    tool_names = set(built._function_toolset.tools.keys())
+
+    assert "read" in tool_names
+    assert "pandoc" not in tool_names
+    assert "python_docx" not in tool_names
+    assert "soffice" not in tool_names
 
 
 async def test_code_mode_still_wraps_other_tools_when_vision_tools_are_native() -> None:
@@ -718,6 +774,28 @@ async def test_github_repository_tools_route_through_toolset_without_code_mode()
 
     assert "email-assistant" in result.body
     assert "Email agent" in result.body
+
+
+async def test_tool_hook_records_completed_tool_step_live() -> None:
+    recorded = []
+
+    async def record_step(step):
+        recorded.append(step)
+
+    env = InMemoryEnvironment()
+    await env.write_text("notes/source.md", "hello")
+    agent = AssistantAgent(use_code_mode=False)
+    deps = _deps(env=env, record_step=record_step)
+    scope = _scope(tool_allowlist=("read",))
+
+    with agent.override_model(scope, _call_then_echo("read", {"path": "notes/source.md"})):
+        result = await agent.run(scope, prompt="read", deps=deps)
+
+    assert "hello" in result.body
+    assert [(s.kind, s.input_summary, s.output_summary) for s in recorded] == [
+        ("tool:read", '{"path": "notes/source.md"}', "hello")
+    ]
+    assert all(not step.kind.startswith("tool:") for step in result.steps)
 
 
 async def test_run_wraps_underlying_exception_with_partial_usage_and_steps() -> None:

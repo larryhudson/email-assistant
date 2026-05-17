@@ -207,6 +207,52 @@ async def test_record_completion_writes_outbound_and_updates_run(
         assert index_rows[0].thread_id == "t-1"
 
 
+async def test_mark_running_updates_run_status(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    async with sqlite_session_factory() as session:
+        run_id, _ = await _seed_run(session, tmp_path=tmp_path)
+
+    recorder = RunRecorder(sqlite_session_factory)
+    await recorder.mark_running(run_id)
+
+    async with sqlite_session_factory() as session:
+        run = await session.get(AgentRun, run_id)
+        assert run is not None
+        assert run.status == "running"
+        assert run.error is None
+
+
+async def test_record_step_persists_step_without_completing_run(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    async with sqlite_session_factory() as session:
+        run_id, _ = await _seed_run(session, tmp_path=tmp_path)
+
+    recorder = RunRecorder(sqlite_session_factory)
+    await recorder.record_step(
+        run_id,
+        RunStepRecord(
+            kind="tool:read",
+            input_summary='{"path": "x"}',
+            output_summary="body",
+            cost_usd=Decimal("0.01"),
+        ),
+    )
+
+    async with sqlite_session_factory() as session:
+        run = await session.get(AgentRun, run_id)
+        assert run is not None
+        assert run.status == "queued"
+        assert run.completed_at is None
+        steps = (await session.execute(select(RunStep))).scalars().all()
+        assert len(steps) == 1
+        assert steps[0].kind == "tool:read"
+        assert steps[0].cost_usd == Decimal("0.01")
+
+
 async def test_record_completion_persists_metered_tool_usage_separately(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,

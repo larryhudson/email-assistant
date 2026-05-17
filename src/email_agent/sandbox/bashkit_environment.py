@@ -287,6 +287,32 @@ class BashkitEnvironment:
             other_entries_skipped=other_entries_skipped,
         )
 
+    async def export_workspace_tar(self) -> bytes:
+        """Export text-like persisted Bashkit workspace files as a tar archive.
+
+        Read-only host mounts, such as the per-run email projection, are skipped
+        because they are recreated for each run and should not become durable
+        workspace state.
+
+        Bashkit's public filesystem API is text-based and its snapshots do not
+        expose raw file bytes. Binary files that have survived only inside a
+        Bashkit snapshot cannot be exported safely, so this exporter omits files
+        that look like binary/corrupted text instead of writing damaged bytes
+        into the Docker volume.
+        """
+        async with self._lock:
+            mounts = dict(self._readonly_host_mounts)
+            for mount_path in mounts:
+                self._bash.unmount(mount_path)
+            try:
+                output = io.BytesIO()
+                with tarfile.open(fileobj=output, mode="w") as tar:
+                    self._add_workspace_tree_to_tar(tar, WORKSPACE_ROOT, ".")
+                return output.getvalue()
+            finally:
+                for mount_path, host_path in mounts.items():
+                    self._bash.mount(mount_path, FileSystem.real(str(host_path), writable=False))
+
     async def mount_readonly_host_dir(self, host_path: Path, mount_path: str) -> None:
         normalized = self._normalize(mount_path)
         source = await asyncio.to_thread(_resolve_existing_dir, host_path)
@@ -322,6 +348,42 @@ class BashkitEnvironment:
     def _unmount_readonly_host_dir(self, path: str) -> None:
         self._bash.unmount(path)
         self._readonly_host_mounts.pop(path, None)
+
+    def _add_workspace_tree_to_tar(self, tar: tarfile.TarFile, path: str, arcname: str) -> None:
+        stat = self._bash.stat(path)
+        file_type = stat.get("file_type")
+        if file_type == "directory":
+            if arcname != ".":
+                info = tarfile.TarInfo(arcname)
+                info.type = tarfile.DIRTYPE
+                info.mtime = int(stat.get("modified", time.time()))
+                tar.addfile(info)
+            for entry in self._bash.read_dir(path):
+                child_name = entry["name"]
+                self._add_workspace_tree_to_tar(
+                    tar,
+                    f"{path.rstrip('/')}/{child_name}",
+                    f"{arcname.rstrip('/')}/{child_name}" if arcname != "." else f"./{child_name}",
+                )
+            return
+
+        if file_type != "file":
+            return
+
+        try:
+            content = self._bash.read_file(path)
+        except RuntimeError as exc:
+            if "Invalid UTF-8" in str(exc):
+                return
+            raise
+        if _looks_like_unexportable_binary_text(content):
+            return
+
+        data = content.encode("utf-8")
+        info = tarfile.TarInfo(arcname)
+        info.size = len(data)
+        info.mtime = int(stat.get("modified", time.time()))
+        tar.addfile(info, io.BytesIO(data))
 
     @staticmethod
     def _normalize(path: str) -> str:
@@ -427,6 +489,17 @@ def _tar_member_workspace_path(name: str) -> str | None:
     if not parts:
         return WORKSPACE_ROOT
     return str(PurePosixPath(WORKSPACE_ROOT).joinpath(*parts))
+
+
+def _looks_like_unexportable_binary_text(content: str) -> bool:
+    if "\ufffd" in content or "\x00" in content:
+        return True
+    if not content:
+        return False
+
+    sample = content[:4096]
+    controls = sum(1 for char in sample if ord(char) < 32 and char not in "\n\r\t\f\b")
+    return controls / len(sample) > 0.05
 
 
 __all__ = [

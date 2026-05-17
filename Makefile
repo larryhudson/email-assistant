@@ -1,4 +1,4 @@
-.PHONY: dev db-up db-down migrate test worktree-up worktree-down
+.PHONY: dev db-up db-down migrate sandbox-build test worktree-up worktree-down
 
 # Bring up the dev process stack: Postgres (docker), web + worker (hivemind).
 # Web binds to 127.0.0.1:18788; worker sends real Mailgun replies by default.
@@ -20,6 +20,9 @@ db-down:
 
 migrate:
 	uv run alembic upgrade head
+
+sandbox-build:
+	docker build -t email-agent-sandbox:slice4 docker/sandbox
 
 test:
 	uv run pytest tests/unit -q

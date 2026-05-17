@@ -485,6 +485,59 @@ async def _migrate_workspace_to_bashkit(assistant_id: str, *, force: bool) -> No
     )
 
 
+@app.command("migrate-workspace-to-docker")
+def migrate_workspace_to_docker(
+    assistant_id: str = typer.Argument(..., help="Assistant id, e.g. a-3f5aad0e."),
+) -> None:
+    """Import text workspace state from a Bashkit snapshot into Docker.
+
+    This is intended for moving back from `SANDBOX_PROVIDER=bashkit` to Docker.
+    The Bashkit snapshot is left untouched. Read-only email projections are
+    recreated from run inputs, and binary files that cannot be read safely from
+    Bashkit are skipped instead of writing corrupted bytes into the Docker
+    volume.
+    """
+    asyncio.run(_migrate_workspace_to_docker(assistant_id))
+
+
+async def _migrate_workspace_to_docker(assistant_id: str) -> None:
+    import docker as docker_sdk
+    from email_agent.config import Settings
+    from email_agent.sandbox.bashkit_environment import BashkitEnvironment, BashkitSnapshotStore
+    from email_agent.sandbox.docker_environment import DockerWorkspaceProvider
+
+    settings = Settings()  # ty: ignore[missing-argument]
+    snapshot_store = BashkitSnapshotStore(settings.sandbox_data_root / "bashkit")
+    snapshot = snapshot_store.load(assistant_id)
+    if snapshot is None:
+        typer.secho(
+            f"No Bashkit snapshot found at {snapshot_store.path_for(assistant_id)}.",
+            fg="red",
+        )
+        raise typer.Exit(1)
+
+    env = BashkitEnvironment(
+        bash_timeout_seconds=settings.sandbox_bash_timeout_seconds,
+        snapshot=snapshot,
+    )
+    archive = await env.export_workspace_tar()
+
+    docker_provider = DockerWorkspaceProvider(
+        client=docker_sdk.from_env(),
+        image=settings.sandbox_image,
+        sandbox_data_root=settings.sandbox_data_root,
+        memory_mb=settings.sandbox_memory_mb,
+        cpu_cores=settings.sandbox_cpu_cores,
+        bash_timeout_seconds=settings.sandbox_bash_timeout_seconds,
+    )
+    await docker_provider.import_workspace_archive(assistant_id, archive)
+
+    typer.secho(
+        f"imported Bashkit text workspace state into Docker volume for {assistant_id}",
+        fg="green",
+    )
+
+
 @app.command()
 def web(
     host: str = typer.Option(

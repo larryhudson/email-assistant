@@ -53,6 +53,32 @@ class RunRecorder:
         self._session_factory = session_factory
         self._curate_memory_defer = curate_memory_defer
 
+    async def mark_running(self, run_id: str) -> None:
+        async with self._session_factory() as session:
+            run = await session.get(AgentRun, run_id)
+            if run is None:
+                raise LookupError(f"agent_run {run_id} not found")
+            run.status = "running"
+            run.error = None
+            await session.commit()
+
+    async def record_step(self, run_id: str, step: RunStepRecord) -> None:
+        async with self._session_factory() as session:
+            run = await session.get(AgentRun, run_id)
+            if run is None:
+                raise LookupError(f"agent_run {run_id} not found")
+            session.add(
+                RunStep(
+                    id=f"s-{uuid.uuid4().hex[:8]}",
+                    run_id=run.id,
+                    kind=step.kind,
+                    input_summary=step.input_summary,
+                    output_summary=step.output_summary,
+                    cost_usd=step.cost_usd,
+                )
+            )
+            await session.commit()
+
     async def record_completion(self, completed: CompletedRun) -> None:
         async with self._session_factory() as session:
             run = await session.get(AgentRun, completed.run_id)

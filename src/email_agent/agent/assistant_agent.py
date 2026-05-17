@@ -1,7 +1,13 @@
 from contextlib import contextmanager
 from decimal import Decimal
+from typing import Any, cast
 
 from pydantic_ai import Agent, RunContext, ToolDefinition, ToolReturn, capture_run_messages
+from pydantic_ai.capabilities import AgentCapability, Hooks
+from pydantic_ai.capabilities.hooks import (
+    AfterToolExecuteHookFunc,
+    OnToolExecuteErrorHookFunc,
+)
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -53,13 +59,15 @@ class AssistantAgent:
         *,
         has_memory: bool = True,
         has_web_search: bool = False,
+        has_document_tools: bool = False,
         use_code_mode: bool = True,
     ) -> None:
         self._has_memory = has_memory
         self._has_web_search = has_web_search
+        self._has_document_tools = has_document_tools
         self._use_code_mode = use_code_mode
         self._agents: dict[
-            tuple[str, str, tuple[str, ...], bool, bool, bool], Agent[AgentDeps, str]
+            tuple[str, str, tuple[str, ...], bool, bool, bool, bool], Agent[AgentDeps, str]
         ] = {}
 
     def _agent_for(self, scope: AssistantScope) -> Agent[AgentDeps, str]:
@@ -69,6 +77,7 @@ class AssistantAgent:
             self._registered_tools(scope),
             self._has_memory,
             self._has_web_search,
+            self._has_document_tools,
             self._use_code_mode,
         )
         cached = self._agents.get(key)
@@ -84,12 +93,62 @@ class AssistantAgent:
         # invoke `override_model(scope, real_model)` before `run`. Real model
         # wiring (Fireworks via OpenAI-compatible provider) lands when the
         # runtime composes things in slice 5's later tasks.
+        async def record_tool_step(
+            ctx: RunContext[AgentDeps],
+            *,
+            call: ToolCallPart,
+            tool_def: ToolDefinition,
+            args: dict[str, Any],
+            result: Any,
+        ) -> Any:
+            _ = tool_def
+            if ctx.deps.record_step is None:
+                return result
+            await ctx.deps.record_step(
+                RunStepRecord(
+                    kind=f"tool:{call.tool_name}",
+                    input_summary=_truncate(_stringify(args)),
+                    output_summary=_truncate(_stringify(result)),
+                    cost_usd=_tool_call_cost(call.tool_name, ctx.deps.metered_usage),
+                )
+            )
+            return result
+
+        async def record_tool_error(
+            ctx: RunContext[AgentDeps],
+            *,
+            call: ToolCallPart,
+            tool_def: ToolDefinition,
+            args: dict[str, Any],
+            error: Exception,
+        ) -> None:
+            _ = tool_def
+            if ctx.deps.record_step is None:
+                return
+            await ctx.deps.record_step(
+                RunStepRecord(
+                    kind=f"tool:{call.tool_name}",
+                    input_summary=_truncate(_stringify(args)),
+                    output_summary=_truncate(f"ERROR: {error}"),
+                    cost_usd=_tool_call_cost(call.tool_name, ctx.deps.metered_usage),
+                )
+            )
+
+        capabilities: list[AgentCapability[AgentDeps]] = [
+            Hooks(
+                after_tool_execute=cast(AfterToolExecuteHookFunc, record_tool_step),
+                tool_execute_error=cast(OnToolExecuteErrorHookFunc, record_tool_error),
+            )
+        ]
+        if self._use_code_mode:
+            capabilities.append(CodeMode(tools=_use_tool_in_code_mode))
+
         agent: Agent[AgentDeps, str] = Agent(
             model=TestModel(),
             deps_type=AgentDeps,
             output_type=str,
             instructions=[scope.system_prompt, SYSTEM_PROMPT_GUIDANCE],
-            capabilities=[CodeMode(tools=_use_tool_in_code_mode)] if self._use_code_mode else None,
+            capabilities=capabilities,
         )
 
         @agent.instructions
@@ -170,6 +229,58 @@ class AssistantAgent:
             ) -> ToolReturn | str:
                 """Render one PDF page to a PNG preview and show it to the model."""
                 return await ctx.deps.toolset.preview_pdf(pdf_path, page, dpi)
+
+        if self._tool_enabled(scope, "pandoc"):
+
+            @agent.tool
+            async def pandoc(
+                ctx: RunContext[AgentDeps],
+                args: list[str],
+                input_paths: list[str],
+                output_paths: list[str],
+                timeout_s: int | None = None,
+            ) -> str:
+                """Run host-side pandoc with CLI-style args.
+
+                Declare every workspace input in `input_paths` and every expected
+                workspace output in `output_paths`; declared outputs are copied
+                back into /workspace after pandoc exits.
+                """
+                return await ctx.deps.toolset.pandoc(args, input_paths, output_paths, timeout_s)
+
+        if self._tool_enabled(scope, "soffice"):
+
+            @agent.tool
+            async def soffice(
+                ctx: RunContext[AgentDeps],
+                args: list[str],
+                input_paths: list[str],
+                output_paths: list[str],
+                timeout_s: int | None = None,
+            ) -> str:
+                """Run host-side LibreOffice/soffice with CLI-style args.
+
+                Declare every workspace input in `input_paths` and every expected
+                workspace output in `output_paths`; declared outputs are copied
+                back into /workspace after soffice exits.
+                """
+                return await ctx.deps.toolset.soffice(args, input_paths, output_paths, timeout_s)
+
+        if self._tool_enabled(scope, "python_docx"):
+
+            @agent.tool
+            async def python_docx(
+                ctx: RunContext[AgentDeps],
+                path: str,
+                operations: list[dict],
+                output_path: str | None = None,
+            ) -> str:
+                """Apply python-docx operations to a DOCX file from /workspace.
+
+                Supported operation actions include `set_margins`,
+                `set_orientation`, and `replace_text`.
+                """
+                return await ctx.deps.toolset.python_docx(path, operations, output_path)
 
         if self._tool_enabled(scope, "memory_search") and self._has_memory:
 
@@ -263,6 +374,8 @@ class AssistantAgent:
             return self._has_memory
         if tool == "web_search":
             return self._has_web_search
+        if tool in {"pandoc", "soffice", "python_docx"}:
+            return self._has_document_tools
         return True
 
     @contextmanager
@@ -291,7 +404,10 @@ class AssistantAgent:
                 partial_usage = _summarise_partial_usage(captured, scope)
                 partial_metered = list(deps.metered_usage)
                 partial_usage = _add_metered_cost(partial_usage, partial_metered)
-                partial_steps = _apply_tool_costs(_extract_steps(list(captured)), partial_metered)
+                partial_steps = _filter_live_recorded_tool_steps(
+                    _apply_tool_costs(_extract_steps(list(captured)), partial_metered),
+                    deps,
+                )
                 raise AgentRunError(
                     exc,
                     usage=partial_usage,
@@ -318,7 +434,10 @@ class AssistantAgent:
                 ),
                 metered_usage,
             ),
-            steps=_apply_tool_costs(_extract_steps(result.all_messages()), metered_usage),
+            steps=_filter_live_recorded_tool_steps(
+                _apply_tool_costs(_extract_steps(result.all_messages()), metered_usage),
+                deps,
+            ),
             metered_usage=metered_usage,
         )
 
@@ -364,6 +483,22 @@ def _apply_tool_costs(
             )
         )
     return priced
+
+
+def _filter_live_recorded_tool_steps(
+    steps: list[RunStepRecord],
+    deps: AgentDeps,
+) -> list[RunStepRecord]:
+    if deps.record_step is None:
+        return steps
+    return [step for step in steps if not step.kind.startswith("tool:")]
+
+
+def _tool_call_cost(tool_name: str, metered_usage: list[MeteredUsage]) -> Decimal:
+    for item in reversed(metered_usage):
+        if item.tool_name == tool_name:
+            return item.cost_usd
+    return Decimal("0")
 
 
 def _summarise_partial_usage(messages: list[ModelMessage], scope: AssistantScope) -> RunUsage:

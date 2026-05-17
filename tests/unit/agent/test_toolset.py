@@ -23,6 +23,7 @@ def _toolset(
     metered: list[MeteredUsage] | None = None,
     search: InMemorySearchAdapter | None = None,
     pdf_renderer: object | None = None,
+    document_tools: object | None = None,
     github: object | None = None,
     github_clone_runner=None,
 ) -> AgentToolset:
@@ -36,6 +37,7 @@ def _toolset(
         metered_usage=metered if metered is not None else [],
         search=search,
         pdf_renderer=pdf_renderer,  # ty: ignore[invalid-argument-type]
+        document_tools=document_tools,  # ty: ignore[invalid-argument-type]
         github=github,  # ty: ignore[invalid-argument-type]
         github_clone_runner=github_clone_runner,
     )
@@ -73,6 +75,29 @@ class _FakePdfRenderer:
             dpi=dpi,
             png_bytes=b"\x89PNG\r\n\x1a\n",
         )
+
+
+class _FakeDocumentTools:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def pandoc(self, env, **kwargs) -> str:
+        self.calls.append(("pandoc", kwargs))
+        for path in kwargs["output_paths"]:
+            await env.write_bytes(path, b"pandoc output")
+        return "exit_code=0\noutputs:\n- docs/out.md"
+
+    async def soffice(self, env, **kwargs) -> str:
+        self.calls.append(("soffice", kwargs))
+        for path in kwargs["output_paths"]:
+            await env.write_bytes(path, b"soffice output")
+        return "exit_code=0\noutputs:\n- docs/out.pdf"
+
+    async def python_docx(self, env, **kwargs) -> str:
+        self.calls.append(("python_docx", kwargs))
+        output = kwargs.get("output_path") or kwargs["path"]
+        await env.write_bytes(output, b"docx output")
+        return f"wrote {output}"
 
 
 class _FakeGitHub:
@@ -239,6 +264,69 @@ async def test_preview_pdf_returns_png_tool_content() -> None:
     assert isinstance(image_content, BinaryContent)
     assert image_content.media_type == "image/png"
     assert image_content.data == b"\x89PNG\r\n\x1a\n"
+
+
+async def test_pandoc_delegates_to_host_document_tools() -> None:
+    env = InMemoryEnvironment()
+    await env.write_bytes("docs/in.docx", b"docx")
+    tools = _FakeDocumentTools()
+
+    result = await _toolset(env, document_tools=tools).pandoc(
+        ["docs/in.docx", "-t", "markdown", "-o", "docs/out.md"],
+        input_paths=["docs/in.docx"],
+        output_paths=["docs/out.md"],
+    )
+
+    assert "exit_code=0" in result
+    assert tools.calls == [
+        (
+            "pandoc",
+            {
+                "args": ["docs/in.docx", "-t", "markdown", "-o", "docs/out.md"],
+                "input_paths": ["docs/in.docx"],
+                "output_paths": ["docs/out.md"],
+                "timeout_s": None,
+            },
+        )
+    ]
+    assert await env.read_bytes("docs/out.md") == b"pandoc output"
+
+
+async def test_soffice_rejects_readonly_email_output() -> None:
+    env = InMemoryEnvironment()
+    result = await _toolset(env, document_tools=_FakeDocumentTools()).soffice(
+        ["--headless"],
+        input_paths=["docs/in.docx"],
+        output_paths=["emails/out.pdf"],
+    )
+
+    assert "ERROR: soffice failed" in result
+    assert "read-only" in result
+
+
+async def test_python_docx_delegates_operations() -> None:
+    env = InMemoryEnvironment()
+    await env.write_bytes("docs/in.docx", b"docx")
+    tools = _FakeDocumentTools()
+
+    result = await _toolset(env, document_tools=tools).python_docx(
+        "docs/in.docx",
+        operations=[{"action": "set_margins", "all": 0.7}],
+        output_path="docs/out.docx",
+    )
+
+    assert result == "wrote docs/out.docx"
+    assert tools.calls == [
+        (
+            "python_docx",
+            {
+                "path": "docs/in.docx",
+                "operations": [{"action": "set_margins", "all": 0.7}],
+                "output_path": "docs/out.docx",
+            },
+        )
+    ]
+    assert await env.read_bytes("docs/out.docx") == b"docx output"
 
 
 async def test_memory_search_delegates_by_assistant_id() -> None:

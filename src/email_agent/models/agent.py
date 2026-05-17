@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Protocol
@@ -27,6 +28,29 @@ class _ToolsetLike(Protocol):
     async def preview_pdf(
         self, pdf_path: str, page: int = 1, dpi: int = 160
     ) -> ToolReturn | str: ...
+
+    async def pandoc(
+        self,
+        args: list[str],
+        input_paths: list[str],
+        output_paths: list[str],
+        timeout_s: int | None = None,
+    ) -> str: ...
+
+    async def soffice(
+        self,
+        args: list[str],
+        input_paths: list[str],
+        output_paths: list[str],
+        timeout_s: int | None = None,
+    ) -> str: ...
+
+    async def python_docx(
+        self,
+        path: str,
+        operations: list[dict],
+        output_path: str | None = None,
+    ) -> str: ...
 
     async def memory_search(self, query: str) -> list[Memory] | str: ...
 
@@ -60,6 +84,7 @@ class AgentDeps:
     toolset: _ToolsetLike
     pending_attachments: list[PendingAttachment] = field(default_factory=list)
     metered_usage: list["MeteredUsage"] = field(default_factory=list)
+    record_step: Callable[["RunStepRecord"], Awaitable[None]] | None = None
     skills_block: str = ""
     context_block: str = ""
     participants_block: str = ""

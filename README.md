@@ -134,6 +134,7 @@ swaps the Mailgun adapter for an in-process stub.
 make db-up      # start Postgres only
 make db-down    # stop Postgres
 make migrate    # alembic upgrade head
+make sandbox-build  # rebuild the agent sandbox image
 make test       # pytest tests/unit
 ```
 
