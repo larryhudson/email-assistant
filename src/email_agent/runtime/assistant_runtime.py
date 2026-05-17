@@ -54,7 +54,7 @@ from email_agent.domain.router import (
 from email_agent.domain.run_footer import strip_footer
 from email_agent.domain.run_recorder import CompletedRun, RunRecorder
 from email_agent.domain.thread_resolver import ThreadResolver
-from email_agent.domain.workspace_projector import EmailWorkspaceProjector
+from email_agent.domain.workspace_projector import EmailWorkspaceProjector, ProjectionResult
 from email_agent.models.agent import AgentDeps, AgentRunError, MeteredUsage
 from email_agent.models.assistant import AssistantScope
 from email_agent.models.email import (
@@ -289,8 +289,7 @@ class AssistantRuntime:
             current_thread_id=thread.id,
             current_message_id=inbound.id,
         )
-        projected_files = _read_projection_files(projection.run_inputs_dir)
-        await workspace.project_emails(projected_files)
+        await _project_workspace_emails(workspace, projection)
         await workspace.ensure_starter_files()
         skills = await workspace.load_skills()
         skills_block = render_skills_block(skills)
@@ -510,6 +509,31 @@ class AssistantRuntime:
 
         return Completed(run_id=run_id, sent=sent)
 
+    async def record_unhandled_run_failure(self, run_id: str, exception: BaseException) -> None:
+        """Best-effort fallback for failures that escape `execute_run` before it records them.
+
+        The Procrastinate task wrapper calls this when the job body raises. If
+        `execute_run` already recorded the failure, this is a no-op to avoid
+        duplicate failure emails and duplicate ledger rows.
+        """
+        try:
+            scope, run, inbound, *_ = await self._load_run(run_id)
+        except Exception:
+            _log.exception("failed to load run %s while recording unhandled failure", run_id)
+            return
+
+        if run.status != "queued":
+            return
+
+        await self._recorder.record_failure(run_id, error=str(exception))
+        if self._email_provider is not None:
+            await self._notify_run_failed(
+                run_id=run_id,
+                scope=scope,
+                inbound_email=_inbound_email_from_message(inbound),
+                exception=exception,
+            )
+
     async def _persist_memory_recalls(self, run_id: str, memories: list[Memory]) -> None:
         """Snapshot what `MemoryPort.recall` returned for this run so the
         admin trace view can show the agent's actual context window. We
@@ -719,6 +743,16 @@ def _read_projection_files(run_inputs_dir: Path) -> list[ProjectedFile]:
         rel = path.relative_to(run_inputs_dir)
         files.append(ProjectedFile(path=str(rel), content=path.read_bytes()))
     return files
+
+
+async def _project_workspace_emails(
+    workspace: AssistantWorkspace,
+    projection: ProjectionResult,
+) -> None:
+    emails_root = projection.run_inputs_dir / "emails"
+    if emails_root.exists() and await workspace.project_email_directory(emails_root):
+        return
+    await workspace.project_emails(_read_projection_files(projection.run_inputs_dir))
 
 
 async def _read_attachments_out(

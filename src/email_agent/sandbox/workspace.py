@@ -1,7 +1,7 @@
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from email_agent.models.sandbox import ProjectedFile
-from email_agent.sandbox.environment import SandboxEnvironment
+from email_agent.sandbox.environment import ReadOnlyHostMountEnvironment, SandboxEnvironment
 from email_agent.sandbox.skills import (
     Skill,
     ensure_starter_files,
@@ -34,6 +34,13 @@ class AssistantWorkspace:
         for projected in files:
             path = self._email_projection_path(projected.path)
             await self._env.write_bytes(path, projected.content)
+
+    async def project_email_directory(self, source_dir: Path) -> bool:
+        """Expose an existing host email projection if the environment supports it."""
+        if not isinstance(self._env, ReadOnlyHostMountEnvironment):
+            return False
+        await self._env.mount_readonly_host_dir(source_dir, EMAILS_DIR)
+        return True
 
     async def project_attachments(self, run_id: str, files: list[ProjectedFile]) -> None:
         run_root = f"{ATTACHMENTS_DIR}/{run_id}"

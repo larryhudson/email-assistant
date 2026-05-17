@@ -34,11 +34,24 @@ from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.assistant import AssistantScope, AssistantStatus
 from email_agent.models.email import NormalizedInboundEmail
 from email_agent.runtime.assistant_runtime import AssistantRuntime, Completed
+from email_agent.sandbox.bashkit_environment import BashkitEnvironment
 from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
 from email_agent.sandbox.workspace import AssistantWorkspace
 from email_agent.sandbox.workspace_provider import StaticWorkspaceProvider, WorkspaceProvider
 from email_agent.search.inmemory import InMemorySearchAdapter
 from email_agent.search.port import SearchResult
+
+
+class _MountingEnvironment(InMemoryEnvironment):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mounted: list[Path] = []
+
+    async def mount_readonly_host_dir(self, host_path: Path, mount_path: str) -> None:
+        self.mounted.append(host_path)
+
+    async def write_bytes(self, path: str, content: bytes) -> None:
+        raise AssertionError("mounted email projection should not copy files")
 
 
 async def _seed_assistant(session: AsyncSession) -> None:
@@ -170,6 +183,65 @@ async def _run_id_for(
     async with session_factory() as session:
         row = (await session.execute(select(AgentRun))).scalar_one()
         return row.id
+
+
+async def test_project_workspace_emails_prefers_mount_over_copy(tmp_path: Path) -> None:
+    from email_agent.domain.workspace_projector import ProjectionResult
+    from email_agent.runtime.assistant_runtime import _project_workspace_emails
+
+    emails_root = tmp_path / "run_inputs" / "r-1" / "emails"
+    emails_root.mkdir(parents=True)
+    large_attachment = emails_root / "thread" / "attachments" / "0001-large.bin"
+    large_attachment.parent.mkdir(parents=True)
+    large_attachment.write_bytes(b"x" * 12_000_001)
+    env = _MountingEnvironment()
+    workspace = AssistantWorkspace(env)
+
+    await _project_workspace_emails(
+        workspace,
+        ProjectionResult(
+            run_inputs_dir=tmp_path / "run_inputs" / "r-1",
+            emails_dir=emails_root / "thread",
+            current_message_path="emails/thread/message.md",
+        ),
+    )
+
+    assert env.mounted == [emails_root]
+
+
+async def test_project_workspace_emails_replaces_previous_run_projection(tmp_path: Path) -> None:
+    from email_agent.domain.workspace_projector import ProjectionResult
+    from email_agent.runtime.assistant_runtime import _project_workspace_emails
+
+    first_emails_root = tmp_path / "run_inputs" / "r-1" / "emails"
+    first_emails_root.mkdir(parents=True)
+    (first_emails_root / "stale.md").write_text("stale")
+    second_emails_root = tmp_path / "run_inputs" / "r-2" / "emails"
+    second_emails_root.mkdir(parents=True)
+    (second_emails_root / "fresh.md").write_text("fresh")
+    workspace = AssistantWorkspace(BashkitEnvironment())
+
+    await _project_workspace_emails(
+        workspace,
+        ProjectionResult(
+            run_inputs_dir=tmp_path / "run_inputs" / "r-1",
+            emails_dir=first_emails_root,
+            current_message_path="emails/stale.md",
+        ),
+    )
+    assert await workspace.environment.read_text("emails/stale.md") == "stale"
+
+    await _project_workspace_emails(
+        workspace,
+        ProjectionResult(
+            run_inputs_dir=tmp_path / "run_inputs" / "r-2",
+            emails_dir=second_emails_root,
+            current_message_path="emails/fresh.md",
+        ),
+    )
+
+    assert not await workspace.environment.exists("emails/stale.md")
+    assert await workspace.environment.read_text("emails/fresh.md") == "fresh"
 
 
 @pytest.mark.xfail(
@@ -776,6 +848,44 @@ async def test_execute_run_notifies_end_user_and_owner_on_unhandled_exception(
     async with sqlite_session_factory() as session:
         run = (await session.execute(select(AgentRun))).scalar_one()
         assert run.status == "failed"
+
+
+async def test_record_unhandled_run_failure_marks_queued_run_failed_and_notifies_owner(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+        owner = await session.get(Owner, "o-1")
+        assert owner is not None
+        owner.email = "admin@example.com"
+        await session.commit()
+
+    email_provider = InMemoryEmailProvider()
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        workspace_provider=StaticWorkspaceProvider(AssistantWorkspace(InMemoryEnvironment())),
+        memory=InMemoryMemoryAdapter(),
+        agent=AssistantAgent(),
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    await runtime.record_unhandled_run_failure(run_id, RuntimeError("projection exploded"))
+
+    assert len(email_provider.sent) == 2
+    owner_msg = next(s for s in email_provider.sent if s.to_emails == ["admin@example.com"])
+    assert owner_msg.subject == f"[email-agent] run {run_id} failed"
+    assert "projection exploded" in owner_msg.body_text
+
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun).where(AgentRun.id == run_id))).scalar_one()
+        assert run.status == "failed"
+        assert run.error is not None
+        assert "projection exploded" in run.error
 
 
 async def test_owner_envelope_omits_admin_url_when_unset(

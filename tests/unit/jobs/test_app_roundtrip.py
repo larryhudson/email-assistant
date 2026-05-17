@@ -18,6 +18,30 @@ from procrastinate.testing import InMemoryConnector
 
 
 @pytest.mark.asyncio
+async def test_run_agent_task_records_unhandled_failure_before_reraising(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    class _StubRuntime:
+        async def execute_run(self, run_id: str) -> object:
+            raise RuntimeError("projection exploded")
+
+        async def record_unhandled_run_failure(self, run_id: str, exc: BaseException) -> None:
+            calls.append((run_id, str(exc)))
+
+    class _Deps:
+        runtime = _StubRuntime()
+
+    from email_agent.jobs import app as jobs_app
+
+    monkeypatch.setattr(jobs_app, "build_worker_deps", lambda: _Deps())
+
+    with pytest.raises(RuntimeError, match="projection exploded"):
+        await jobs_app.run_agent(run_id="r-1")
+
+    assert calls == [("r-1", "projection exploded")]
+
+
+@pytest.mark.asyncio
 async def test_run_agent_defer_then_worker_invokes_runtime() -> None:
     seen: list[str] = []
 

@@ -12,6 +12,7 @@ see `tests/unit/jobs/`.
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,8 @@ from sqlalchemy.engine.url import make_url
 from email_agent.config import Settings
 from email_agent.jobs.curate_memory import curate_memory_impl
 from email_agent.jobs.run_agent import run_agent_impl
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -133,7 +136,14 @@ class _WorkerDeps:
 @app.task(name="run_agent")
 async def run_agent(run_id: str) -> str:
     deps = build_worker_deps()
-    outcome = await run_agent_impl(run_id=run_id, runtime=deps.runtime)
+    try:
+        outcome = await run_agent_impl(run_id=run_id, runtime=deps.runtime)
+    except Exception as exc:
+        try:
+            await deps.runtime.record_unhandled_run_failure(run_id, exc)
+        except Exception:
+            _log.exception("failed to record unhandled run_agent failure for run %s", run_id)
+        raise
     return outcome.__class__.__name__
 
 

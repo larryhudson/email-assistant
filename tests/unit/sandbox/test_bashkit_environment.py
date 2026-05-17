@@ -6,6 +6,7 @@ from email_agent.sandbox.bashkit_environment import (
     BashkitSnapshotStore,
     BashkitWorkspaceProvider,
 )
+from email_agent.sandbox.workspace import AssistantWorkspace
 
 
 async def test_text_and_bytes_round_trip_under_workspace() -> None:
@@ -140,6 +141,65 @@ async def test_import_workspace_tar_imports_text_and_reports_skipped_binary() ->
     assert report.binary_files_skipped == 1
     assert await env.read_text("notes/a.txt") == "hello"
     assert not await env.exists("bin/blob.dat")
+
+
+async def test_project_email_directory_mounts_large_host_files_read_only(tmp_path) -> None:
+    source = tmp_path / "emails"
+    attachment_dir = source / "thread" / "attachments"
+    attachment_dir.mkdir(parents=True)
+    large_attachment = attachment_dir / "0001-large.bin"
+    large_attachment.write_bytes(b"x" * 12_000_001)
+
+    workspace = AssistantWorkspace(BashkitEnvironment())
+
+    mounted = await workspace.project_email_directory(source)
+
+    assert mounted
+    assert (
+        await workspace.environment.stat("emails/thread/attachments/0001-large.bin")
+    ).size == 12_000_001
+    result = await workspace.environment.exec("wc -c emails/thread/attachments/0001-large.bin")
+    assert result.exit_code == 0
+    assert result.stdout == "12000001 emails/thread/attachments/0001-large.bin\n"
+
+    write_result = await workspace.environment.exec("printf nope > emails/thread/new.txt")
+    assert write_result.exit_code != 0
+    assert not (source / "thread" / "new.txt").exists()
+
+
+async def test_projected_email_directory_is_not_persisted_in_snapshot(tmp_path) -> None:
+    source = tmp_path / "emails"
+    source.mkdir()
+    (source / "message.md").write_text("hello")
+    env = BashkitEnvironment()
+    workspace = AssistantWorkspace(env)
+
+    assert await workspace.project_email_directory(source)
+    await env.write_text("notes.md", "persist me")
+
+    restored = BashkitEnvironment(snapshot=await env.snapshot())
+
+    assert await restored.read_text("notes.md") == "persist me"
+    assert not await restored.exists("emails/message.md")
+
+
+async def test_project_email_directory_replaces_previous_run_projection(tmp_path) -> None:
+    first_source = tmp_path / "r-1" / "emails"
+    first_source.mkdir(parents=True)
+    (first_source / "stale.md").write_text("stale")
+    second_source = tmp_path / "r-2" / "emails"
+    second_source.mkdir(parents=True)
+    (second_source / "fresh.md").write_text("fresh")
+    env = BashkitEnvironment()
+    workspace = AssistantWorkspace(env)
+
+    assert await workspace.project_email_directory(first_source)
+    assert await env.read_text("emails/stale.md") == "stale"
+
+    assert await workspace.project_email_directory(second_source)
+
+    assert not await env.exists("emails/stale.md")
+    assert await env.read_text("emails/fresh.md") == "fresh"
 
 
 def _tar_bytes(entries: list[tuple[str, bytes | None]]) -> bytes:

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
-from bashkit import Bash
+from bashkit import Bash, FileSystem
 
 from email_agent.sandbox.environment import FileStat, ShellResult
 from email_agent.sandbox.workspace import AssistantWorkspace
@@ -94,6 +94,7 @@ class BashkitEnvironment:
         self._on_change = on_change
         self._lock = asyncio.Lock()
         self._binary_files: dict[str, tuple[bytes, int]] = {}
+        self._readonly_host_mounts: dict[str, Path] = {}
         self._exec_generation = 0
         self._bash.mkdir(WORKSPACE_ROOT, True)
         self._bash.execute_sync(f"cd {_shell_quote(WORKSPACE_ROOT)}")
@@ -209,6 +210,10 @@ class BashkitEnvironment:
     async def rm(self, path: str, *, recursive: bool = False, force: bool = False) -> None:
         normalized = self._normalize(path)
         async with self._lock:
+            if normalized in self._readonly_host_mounts:
+                self._unmount_readonly_host_dir(normalized)
+                self._notify_change()
+                return
             if force and not self._bash.exists(normalized):
                 return
             try:
@@ -223,7 +228,14 @@ class BashkitEnvironment:
 
     async def snapshot(self) -> bytes:
         async with self._lock:
-            return self._bash.snapshot()
+            mounts = dict(self._readonly_host_mounts)
+            for mount_path in mounts:
+                self._bash.unmount(mount_path)
+            try:
+                return self._bash.snapshot()
+            finally:
+                for mount_path, host_path in mounts.items():
+                    self._bash.mount(mount_path, FileSystem.real(str(host_path), writable=False))
 
     async def import_workspace_tar(self, archive: bytes) -> BashkitImportReport:
         files_imported = 0
@@ -275,6 +287,26 @@ class BashkitEnvironment:
             other_entries_skipped=other_entries_skipped,
         )
 
+    async def mount_readonly_host_dir(self, host_path: Path, mount_path: str) -> None:
+        normalized = self._normalize(mount_path)
+        source = await asyncio.to_thread(_resolve_existing_dir, host_path)
+
+        async with self._lock:
+            if normalized in self._readonly_host_mounts:
+                self._unmount_readonly_host_dir(normalized)
+            elif self._bash.exists(normalized):
+                self._bash.remove(normalized, True)
+
+            self._ensure_parent_dirs(normalized)
+            self._bash.mount(normalized, FileSystem.real(str(source), writable=False))
+            self._readonly_host_mounts[normalized] = source
+
+            prefix = normalized.rstrip("/") + "/"
+            for cached_path in list(self._binary_files):
+                if cached_path == normalized or cached_path.startswith(prefix):
+                    self._binary_files.pop(cached_path, None)
+            self._notify_change()
+
     def _read_text_unlocked(self, path: str) -> str:
         normalized = self._normalize(path)
         try:
@@ -286,6 +318,10 @@ class BashkitEnvironment:
         parent = str(PurePosixPath(path).parent)
         if parent and parent != ".":
             self._bash.mkdir(parent, True)
+
+    def _unmount_readonly_host_dir(self, path: str) -> None:
+        self._bash.unmount(path)
+        self._readonly_host_mounts.pop(path, None)
 
     @staticmethod
     def _normalize(path: str) -> str:
@@ -370,6 +406,13 @@ def _timestamp_to_datetime(value: object) -> datetime | None:
     if not isinstance(value, int | float):
         return None
     return datetime.fromtimestamp(value, UTC)
+
+
+def _resolve_existing_dir(path: Path) -> Path:
+    resolved = path.resolve()
+    if not resolved.is_dir():
+        raise NotADirectoryError(str(resolved))
+    return resolved
 
 
 def _tar_member_workspace_path(name: str) -> str | None:

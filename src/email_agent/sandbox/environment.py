@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 
@@ -51,4 +52,11 @@ class SandboxEnvironment(Protocol):
     async def rm(self, path: str, *, recursive: bool = False, force: bool = False) -> None: ...
 
 
-__all__ = ["FileStat", "SandboxEnvironment", "ShellResult"]
+@runtime_checkable
+class ReadOnlyHostMountEnvironment(SandboxEnvironment, Protocol):
+    """Environment that can expose a host directory read-only in the sandbox."""
+
+    async def mount_readonly_host_dir(self, host_path: Path, mount_path: str) -> None: ...
+
+
+__all__ = ["FileStat", "ReadOnlyHostMountEnvironment", "SandboxEnvironment", "ShellResult"]
