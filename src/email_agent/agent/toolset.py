@@ -36,6 +36,9 @@ class _ScheduledTasksLike(Protocol):
         run_at: datetime,
         name: str,
         body: str,
+        command: str | None = None,
+        is_agent_enabled: bool = True,
+        max_unanswered_runs: int | None = 3,
         created_by_run_id: str | None = None,
     ) -> ScheduledTask: ...
 
@@ -46,6 +49,9 @@ class _ScheduledTasksLike(Protocol):
         cron_expr: str,
         name: str,
         body: str,
+        command: str | None = None,
+        is_agent_enabled: bool = True,
+        max_unanswered_runs: int | None = 3,
         created_by_run_id: str | None = None,
     ) -> ScheduledTask: ...
 
@@ -390,7 +396,16 @@ class AgentToolset:
             return []
         return await self._scheduled_tasks.list_for_assistant(self._assistant_id)
 
-    async def create_scheduled_task(self, kind: str, when: str, name: str, body: str) -> str:
+    async def create_scheduled_task(
+        self,
+        kind: str,
+        when: str,
+        name: str,
+        body: str,
+        command: str | None = None,
+        is_agent_enabled: bool = True,
+        max_unanswered_runs: int | None = 3,
+    ) -> str:
         """Create a scheduled synthetic-inbound task for this assistant.
 
         `kind` is 'once' or 'cron'. For 'once', `when` is an ISO-8601
@@ -403,8 +418,10 @@ class AgentToolset:
             return _tool_error("create_scheduled_task", "scheduled tasks not configured")
         if not name:
             return _tool_error("create_scheduled_task", "name must not be empty")
-        if not body:
+        if not body and command is None:
             return _tool_error("create_scheduled_task", "body must not be empty")
+        if command is not None and not command.strip():
+            return _tool_error("create_scheduled_task", "command must not be empty")
 
         try:
             if kind == "once":
@@ -414,6 +431,9 @@ class AgentToolset:
                     run_at=run_at,
                     name=name,
                     body=body,
+                    command=command,
+                    is_agent_enabled=is_agent_enabled,
+                    max_unanswered_runs=max_unanswered_runs,
                     created_by_run_id=self._run_id,
                 )
             elif kind == "cron":
@@ -422,6 +442,9 @@ class AgentToolset:
                     cron_expr=when,
                     name=name,
                     body=body,
+                    command=command,
+                    is_agent_enabled=is_agent_enabled,
+                    max_unanswered_runs=max_unanswered_runs,
                     created_by_run_id=self._run_id,
                 )
             else:

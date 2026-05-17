@@ -158,16 +158,27 @@ async def tick_scheduled_tasks(timestamp: int) -> int:
     """
     from datetime import UTC, datetime
 
-    from email_agent.scheduled.tick import tick_scheduled_tasks_impl
+    from email_agent.runtime.assistant_runtime import RuntimeScheduledDirectSender
+    from email_agent.scheduled.tick import (
+        WorkspaceScheduledCommandRunner,
+        tick_scheduled_tasks_impl,
+    )
 
     deps = build_worker_deps()
     now = datetime.fromtimestamp(timestamp, tz=UTC)
     before = await deps.runtime.scheduled_tasks.claim_due(as_of=now)
+    command_runner = (
+        WorkspaceScheduledCommandRunner(deps.runtime.workspace_provider)
+        if deps.runtime.workspace_provider is not None
+        else None
+    )
     await tick_scheduled_tasks_impl(
         runtime=deps.runtime,
         service=deps.runtime.scheduled_tasks,
         session_factory=deps.session_factory,
         now=now,
+        command_runner=command_runner,
+        direct_sender=RuntimeScheduledDirectSender(deps.runtime),
     )
     return len(before)
 

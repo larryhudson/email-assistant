@@ -673,6 +673,17 @@ async def test_create_scheduled_task_tool_routes_through_toolset() -> None:
     assert "created scheduled_task" in result.body
 
 
+async def test_create_scheduled_task_tool_schema_exposes_command_fields() -> None:
+    built = AssistantAgent()._agent_for(_scope(tool_allowlist=("create_scheduled_task",)))
+
+    schema = built._function_toolset.tools["create_scheduled_task"].function_schema.json_schema
+    properties = schema["properties"]
+
+    assert "command" in properties
+    assert "is_agent_enabled" in properties
+    assert "max_unanswered_runs" in properties
+
+
 @pytest.mark.xfail(
     reason="Code mode exposes run_code instead of direct list_scheduled_tasks calls.",
     strict=True,

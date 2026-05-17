@@ -64,7 +64,16 @@ class _ToolsetLike(Protocol):
 
     async def list_scheduled_tasks(self) -> list[ScheduledTask]: ...
 
-    async def create_scheduled_task(self, kind: str, when: str, name: str, body: str) -> str: ...
+    async def create_scheduled_task(
+        self,
+        kind: str,
+        when: str,
+        name: str,
+        body: str,
+        command: str | None = None,
+        is_agent_enabled: bool = True,
+        max_unanswered_runs: int | None = 3,
+    ) -> str: ...
 
     async def delete_scheduled_task(self, task_id: str) -> str: ...
 

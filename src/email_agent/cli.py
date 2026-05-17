@@ -308,7 +308,6 @@ async def _seed_assistant(
         AssistantScopeRow,
         Budget,
         EndUser,
-        Owner,
     )
     from email_agent.db.session import make_engine, make_session_factory
 
@@ -331,23 +330,11 @@ async def _seed_assistant(
             )
             return
 
-        owner = (
-            await session.execute(select(Owner).where(Owner.name == owner_name))
-        ).scalar_one_or_none()
-        if owner is None:
-            if not owner_email:
-                typer.secho(
-                    "--owner-email is required when creating a new owner.",
-                    fg="red",
-                )
-                raise typer.Exit(2)
-            owner = Owner(
-                id=f"o-{uuid.uuid4().hex[:8]}",
-                name=owner_name,
-                email=owner_email,
-            )
-            session.add(owner)
-            await session.flush()
+        owner = await _get_or_create_owner(
+            session,
+            owner_name=owner_name,
+            owner_email=owner_email,
+        )
 
         end_user = (
             await session.execute(select(EndUser).where(EndUser.email == end_user_email))
@@ -418,6 +405,58 @@ async def _seed_assistant(
         f"budget={budget_id} (${monthly_budget_usd}/mo)",
         fg="green",
     )
+
+
+async def _get_or_create_owner(session, *, owner_name: str, owner_email: str | None):
+    import uuid
+
+    from sqlalchemy import select
+
+    from email_agent.db.models import Owner
+
+    if owner_email:
+        owners_by_email = (
+            await session.execute(
+                select(Owner).where(Owner.email == owner_email).order_by(Owner.id)
+            )
+        ).scalars()
+        owners = list(owners_by_email)
+        if owners:
+            owner = owners[0]
+            if owner.name != owner_name:
+                owner.name = owner_name
+            return owner
+
+    owners_by_name = (
+        await session.execute(select(Owner).where(Owner.name == owner_name))
+    ).scalars()
+    owners = list(owners_by_name)
+    if len(owners) == 1:
+        owner = owners[0]
+        if owner_email and not owner.email:
+            owner.email = owner_email
+        return owner
+    if len(owners) > 1 and not owner_email:
+        typer.secho(
+            f"Multiple owners named {owner_name!r}; pass --owner-email to choose one.",
+            fg="red",
+        )
+        raise typer.Exit(2)
+
+    if not owner_email:
+        typer.secho(
+            "--owner-email is required when creating a new owner.",
+            fg="red",
+        )
+        raise typer.Exit(2)
+    owner = Owner(
+        id=f"o-{uuid.uuid4().hex[:8]}",
+        name=owner_name,
+        email=owner_email,
+    )
+    session.add(owner)
+    await session.flush()
+    return owner
 
 
 @app.command()

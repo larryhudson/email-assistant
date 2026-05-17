@@ -33,7 +33,7 @@ from email_agent.mail.inmemory import InMemoryEmailProvider
 from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.assistant import AssistantScope, AssistantStatus
 from email_agent.models.email import NormalizedInboundEmail
-from email_agent.runtime.assistant_runtime import AssistantRuntime, Completed
+from email_agent.runtime.assistant_runtime import AssistantRuntime, Completed, QuietExited
 from email_agent.sandbox.bashkit_environment import BashkitEnvironment
 from email_agent.sandbox.inmemory_environment import InMemoryEnvironment
 from email_agent.sandbox.workspace import AssistantWorkspace
@@ -361,6 +361,46 @@ async def test_execute_run_sends_reply_with_code_mode_run_code(
         run = (await session.execute(select(AgentRun))).scalar_one()
         assert run.status == "completed"
         assert run.reply_message_id is not None
+
+
+async def test_execute_run_quietly_exits_when_agent_returns_exact_sentinel(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    email_provider = InMemoryEmailProvider()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    agent = AssistantAgent()
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        workspace_provider=StaticWorkspaceProvider(workspace),
+        memory=InMemoryMemoryAdapter(),
+        agent=agent,
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    async def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content="QUIETLY_EXIT")])
+
+    with agent.override_model(_scope(), FunctionModel(fn)):
+        outcome = await runtime.execute_run(run_id)
+
+    assert isinstance(outcome, QuietExited)
+    assert email_provider.sent == []
+
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun).where(AgentRun.id == run_id))).scalar_one()
+        assert run.status == "quiet_exited"
+        assert run.reply_message_id is None
+        assert run.completed_at is not None
+        usage_rows = (await session.execute(select(UsageLedger))).scalars().all()
+        assert len(usage_rows) == 1
 
 
 def _search_then_reply() -> FunctionModel:

@@ -197,9 +197,12 @@ async def test_create_scheduled_task_validates_required_text(
     service = ScheduledTaskService(sqlite_session_factory, clock=_clock(now))
     toolset = _toolset(service)
 
-    kwargs = {"name": "s", "body": "b"}
-    kwargs[missing_field] = ""
+    name = "" if missing_field == "name" else "s"
+    body = "" if missing_field == "body" else "b"
     result = await toolset.create_scheduled_task(
-        kind="once", when=(now + timedelta(hours=1)).isoformat(), **kwargs
+        kind="once",
+        when=(now + timedelta(hours=1)).isoformat(),
+        name=name,
+        body=body,
     )
     assert "ERROR" in result

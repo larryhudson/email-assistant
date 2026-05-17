@@ -4,6 +4,7 @@ from decimal import Decimal
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -287,6 +288,13 @@ class ScheduledTaskRow(Base):
     status: Mapped[str] = mapped_column(String(16), default="active")
     name: Mapped[str] = mapped_column(String(998))
     body: Mapped[str] = mapped_column(Text)
+    command: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_agent_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    max_unanswered_runs: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=3, server_default="3"
+    )
+    consecutive_unanswered_runs: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    paused_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_run_id: Mapped[str | None] = mapped_column(
         ForeignKey("agent_runs.id"), nullable=True
     )
@@ -294,6 +302,26 @@ class ScheduledTaskRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class ScheduledTaskFireRow(Base):
+    """Audit record for one due scheduled-task tick."""
+
+    __tablename__ = "scheduled_task_fires"
+
+    id: Mapped[str] = _str_pk()
+    scheduled_task_id: Mapped[str] = mapped_column(
+        ForeignKey("scheduled_tasks.id", ondelete="CASCADE")
+    )
+    fired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(32))
+    exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stdout: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stderr: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Budget(Base):
@@ -322,6 +350,7 @@ __all__ = [
     "MessageIndex",
     "Owner",
     "RunStep",
+    "ScheduledTaskFireRow",
     "ScheduledTaskRow",
     "UsageLedger",
 ]

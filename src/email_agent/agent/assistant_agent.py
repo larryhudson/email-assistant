@@ -343,16 +343,36 @@ class AssistantAgent:
                 when: str,
                 name: str,
                 body: str,
+                command: str | None = None,
+                is_agent_enabled: bool = True,
+                max_unanswered_runs: int | None = 3,
             ) -> str:
-                """Create a scheduled task that fires a synthetic inbound to this assistant.
+                """Create a one-off or recurring scheduled task for this assistant.
 
                 `kind` is 'once' or 'cron'. For 'once', `when` is an ISO-8601
                 timezone-aware datetime (e.g. '2026-05-12T09:00:00+10:00'); for
                 'cron', `when` is a 5-field cron expression (e.g. '0 9 * * *').
                 `name` is a short label used as the synthetic inbound's subject;
-                `body` is the prompt the agent will receive when the task fires.
+                `body` is the prompt the agent will receive when the task fires,
+                unless `command` is set.
+
+                `command` is optional bash run in the assistant sandbox before
+                dispatch. Exit 0 continues with stdout as the payload; exit 1
+                quietly skips without an agent run or email; exit 2+ records a
+                failure and retries later. When `is_agent_enabled` is false,
+                command stdout is emailed directly to the user with no agent run.
+                `max_unanswered_runs` pauses recurring user-visible tasks after
+                that many notifications without a real user reply.
                 """
-                return await ctx.deps.toolset.create_scheduled_task(kind, when, name, body)
+                return await ctx.deps.toolset.create_scheduled_task(
+                    kind,
+                    when,
+                    name,
+                    body,
+                    command,
+                    is_agent_enabled,
+                    max_unanswered_runs,
+                )
 
         if self._tool_enabled(scope, "delete_scheduled_task"):
 

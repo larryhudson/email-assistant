@@ -32,6 +32,8 @@ from email_agent.db.models import (
     EndUser,
     Owner,
     RunMemoryRecall,
+    ScheduledTaskFireRow,
+    ScheduledTaskRow,
 )
 from email_agent.domain.budget_governor import (
     Allow,
@@ -66,6 +68,7 @@ from email_agent.models.email import (
 )
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import PendingAttachment, ProjectedFile
+from email_agent.models.scheduled import ScheduledTaskKind, ScheduledTaskStatus
 from email_agent.sandbox.skills import (
     SYSTEM_PROMPT_GUIDANCE,
     render_context_block,
@@ -120,13 +123,38 @@ class BudgetLimited:
 
 
 @dataclass(frozen=True)
+class QuietExited:
+    run_id: str
+
+
+@dataclass(frozen=True)
 class Failed:
     run_id: str
     error: str
 
 
+class RuntimeScheduledDirectSender:
+    def __init__(self, runtime: "AssistantRuntime") -> None:
+        self._runtime = runtime
+
+    async def send(
+        self,
+        *,
+        assistant_id: str,
+        to_email: str,
+        subject: str,
+        body_text: str,
+    ) -> None:
+        await self._runtime.send_scheduled_direct_email(
+            assistant_id=assistant_id,
+            to_email=to_email,
+            subject=subject,
+            body_text=body_text,
+        )
+
+
 AcceptOutcome = Accepted | Dropped
-RunOutcome = Completed | BudgetLimited | Failed
+RunOutcome = Completed | BudgetLimited | QuietExited | Failed
 
 
 class AssistantRuntime:
@@ -195,6 +223,35 @@ class AssistantRuntime:
     def scheduled_tasks(self) -> ScheduledTaskService:
         return self._scheduled_tasks
 
+    @property
+    def workspace_provider(self) -> WorkspaceProvider | None:
+        return self._workspace_provider
+
+    async def send_scheduled_direct_email(
+        self,
+        *,
+        assistant_id: str,
+        to_email: str,
+        subject: str,
+        body_text: str,
+    ) -> None:
+        if self._email_provider is None:
+            raise RuntimeError("scheduled direct email requires email_provider to be configured")
+        async with self._session_factory() as session:
+            assistant = await session.get(Assistant, assistant_id)
+            if assistant is None:
+                raise LookupError(f"assistant {assistant_id} not found")
+            from_email = assistant.inbound_address
+
+        envelope = NormalizedOutboundEmail(
+            from_email=from_email,
+            to_emails=[to_email],
+            subject=subject,
+            body_text=body_text,
+            message_id_header=self._message_id_factory(),
+        )
+        await self._email_provider.send_reply(envelope)
+
     async def accept_inbound(self, email: NormalizedInboundEmail) -> AcceptOutcome:
         # Drop our own outbound footer if a reply quotes it. Done here, at the
         # single runtime seam, so every adapter (Mailgun, eml, future ones)
@@ -225,6 +282,9 @@ class AssistantRuntime:
             )
             run_id = run.id
             await session.commit()
+
+        if persisted.created and not email.provider_message_id.startswith("sched-"):
+            await self._reset_scheduled_unanswered_counters(scope.assistant_id)
 
         # Enqueue ONLY for newly-persisted inbounds. persist_inbound +
         # _ensure_queued_run share a transaction, so created==True implies
@@ -444,6 +504,17 @@ class AssistantRuntime:
             )
             raise
 
+        if agent_result.body.strip() == "QUIETLY_EXIT":
+            await self._recorder.record_quiet_exit(
+                run_id=run_id,
+                scope=scope,
+                steps=agent_result.steps,
+                usage=agent_result.usage,
+                metered_usage=agent_result.metered_usage,
+            )
+            await self._record_scheduled_agent_quiet_exit(run_id)
+            return QuietExited(run_id=run_id)
+
         # Anything that raises between here and record_completion (attachment
         # read-out, markdown rendering, mailgun send, recorder write) leaves
         # the run un-recorded and the end user/owner uninformed. Treat those
@@ -496,6 +567,7 @@ class AssistantRuntime:
                     metered_usage=agent_result.metered_usage,
                 )
             )
+            await self._record_scheduled_visible_notification(run_id, scope)
         except Exception as exc:
             await self._recorder.record_failure(
                 run_id,
@@ -733,6 +805,99 @@ class AssistantRuntime:
             if owner is None:
                 return None
             return owner.email or None
+
+    async def _reset_scheduled_unanswered_counters(self, assistant_id: str) -> None:
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(ScheduledTaskRow).where(
+                        ScheduledTaskRow.assistant_id == assistant_id,
+                        ScheduledTaskRow.consecutive_unanswered_runs != 0,
+                    )
+                )
+            ).scalars()
+            changed = False
+            for row in rows:
+                row.consecutive_unanswered_runs = 0
+                changed = True
+            if changed:
+                await session.commit()
+
+    async def _record_scheduled_visible_notification(
+        self,
+        run_id: str,
+        scope: AssistantScope,
+    ) -> None:
+        pause_notice: tuple[str, str] | None = None
+        async with self._session_factory() as session:
+            run = await session.get(AgentRun, run_id)
+            if run is None or run.triggered_by_scheduled_task_id is None:
+                return
+            task = await session.get(ScheduledTaskRow, run.triggered_by_scheduled_task_id)
+            if task is None:
+                return
+
+            task.consecutive_unanswered_runs += 1
+            if (
+                task.kind == ScheduledTaskKind.CRON.value
+                and task.max_unanswered_runs is not None
+                and task.max_unanswered_runs > 0
+                and task.consecutive_unanswered_runs >= task.max_unanswered_runs
+            ):
+                task.status = ScheduledTaskStatus.PAUSED.value
+                task.paused_reason = (
+                    f"Paused after {task.consecutive_unanswered_runs} scheduled notifications "
+                    "with no replies."
+                )
+                session.add(
+                    ScheduledTaskFireRow(
+                        id=f"stf-{uuid.uuid4().hex[:10]}",
+                        scheduled_task_id=task.id,
+                        fired_at=datetime.now(UTC),
+                        status="paused",
+                        exit_code=None,
+                        stdout=None,
+                        stderr=task.paused_reason,
+                        agent_run_id=run_id,
+                    )
+                )
+                pause_notice = (
+                    f"Paused: {task.name}",
+                    f"Paused recurring scheduled task '{task.name}' after "
+                    f"{task.consecutive_unanswered_runs} notifications with no replies.",
+                )
+            await session.commit()
+
+        if pause_notice is not None:
+            subject, body_text = pause_notice
+            try:
+                await self.send_scheduled_direct_email(
+                    assistant_id=scope.assistant_id,
+                    to_email=scope.end_user_email,
+                    subject=subject,
+                    body_text=body_text,
+                )
+            except Exception:
+                _log.exception("failed to send scheduled task pause notice for run %s", run_id)
+
+    async def _record_scheduled_agent_quiet_exit(self, run_id: str) -> None:
+        async with self._session_factory() as session:
+            run = await session.get(AgentRun, run_id)
+            if run is None or run.triggered_by_scheduled_task_id is None:
+                return
+            session.add(
+                ScheduledTaskFireRow(
+                    id=f"stf-{uuid.uuid4().hex[:10]}",
+                    scheduled_task_id=run.triggered_by_scheduled_task_id,
+                    fired_at=datetime.now(UTC),
+                    status="agent_quiet_exited",
+                    exit_code=None,
+                    stdout=None,
+                    stderr=None,
+                    agent_run_id=run_id,
+                )
+            )
+            await session.commit()
 
 
 # --- helpers ---------------------------------------------------------------

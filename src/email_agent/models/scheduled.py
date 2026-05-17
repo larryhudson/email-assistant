@@ -36,6 +36,11 @@ class ScheduledTask(BaseModel):
     status: ScheduledTaskStatus
     name: str
     body: str
+    command: str | None = None
+    is_agent_enabled: bool = True
+    max_unanswered_runs: int | None = 3
+    consecutive_unanswered_runs: int = 0
+    paused_reason: str | None = None
     created_by_run_id: str | None
     created_at: datetime
     updated_at: datetime

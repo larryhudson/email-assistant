@@ -46,6 +46,9 @@ class ScheduledTaskService:
         run_at: datetime,
         name: str,
         body: str,
+        command: str | None = None,
+        is_agent_enabled: bool = True,
+        max_unanswered_runs: int | None = 3,
         created_by_run_id: str | None = None,
     ) -> ScheduledTask:
         if run_at.tzinfo is None:
@@ -61,6 +64,9 @@ class ScheduledTaskService:
             status=ScheduledTaskStatus.ACTIVE.value,
             name=name,
             body=body,
+            command=command,
+            is_agent_enabled=is_agent_enabled,
+            max_unanswered_runs=max_unanswered_runs,
             created_by_run_id=created_by_run_id,
         )
         async with self._session_factory() as session:
@@ -76,6 +82,9 @@ class ScheduledTaskService:
         cron_expr: str,
         name: str,
         body: str,
+        command: str | None = None,
+        is_agent_enabled: bool = True,
+        max_unanswered_runs: int | None = 3,
         created_by_run_id: str | None = None,
     ) -> ScheduledTask:
         now = self._clock()
@@ -98,6 +107,9 @@ class ScheduledTaskService:
             status=ScheduledTaskStatus.ACTIVE.value,
             name=name,
             body=body,
+            command=command,
+            is_agent_enabled=is_agent_enabled,
+            max_unanswered_runs=max_unanswered_runs,
             created_by_run_id=created_by_run_id,
         )
         async with self._session_factory() as session:
@@ -214,6 +226,11 @@ def _to_domain(row: ScheduledTaskRow) -> ScheduledTask:
         status=ScheduledTaskStatus(row.status),
         name=row.name,
         body=row.body,
+        command=row.command,
+        is_agent_enabled=row.is_agent_enabled,
+        max_unanswered_runs=row.max_unanswered_runs,
+        consecutive_unanswered_runs=row.consecutive_unanswered_runs,
+        paused_reason=row.paused_reason,
         created_by_run_id=row.created_by_run_id,
         created_at=created_at,
         updated_at=updated_at,

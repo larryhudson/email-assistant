@@ -217,7 +217,7 @@ How to update:
 
 _STARTER_SKILL_SCHEDULING_TASKS = """---
 name: scheduling-tasks
-description: Schedule a one-off or recurring synthetic inbound to yourself (reminders, daily check-ins, follow-ups).
+description: Schedule one-off or recurring reminders, follow-ups, check-ins, automations, periodic tasks, alerts, digests, and "only tell me when..." background checks.
 ---
 
 # Scheduling tasks
@@ -234,9 +234,45 @@ get a fresh agent run with full thread/memory context. Write `body` as a
 prompt to your future self ("Send Larry a friendly check-in asking how the
 launch went").
 
+## Choosing plain vs command-backed tasks
+
+Use a plain scheduled task (`command=None`) when the task should always create
+an agent run, such as a reminder, a daily check-in, or a guaranteed follow-up.
+
+Use a command-backed scheduled task when the schedule is really an ambient
+check and most ticks may have nothing useful to say. The command should do the
+deterministic checking first, then decide whether the model or user should be
+notified. Good examples:
+
+- Check whether a watched file, feed, calendar export, or script output has
+  changed.
+- Check whether a weather/calendar/project condition is worth nudging about.
+- Produce a ready-to-send digest only when there are new items.
+
+The command runs as bash inside the assistant sandbox before any model call:
+
+- exit `0`: continue; stdout becomes the payload.
+- exit `1`: expected quiet no-op; stderr should explain why nothing was sent.
+- exit `2+`: real failure; stdout/stderr are diagnostics and the task retries.
+
+When `is_agent_enabled=True`, stdout is delivered to you as the scheduled
+inbound body. Use this when stdout is raw context and you should decide how to
+write the final email.
+
+When `is_agent_enabled=False`, stdout is sent directly to the user as the email
+body. Use this only when the command already formats a complete user-facing
+message and no model judgement or polish is needed.
+
+If a scheduled task reaches you but there is nothing useful to tell the user,
+reply exactly:
+
+```
+QUIETLY_EXIT
+```
+
 ## Tools
 
-- `create_scheduled_task(kind, when, name, body)` — schedule a task.
+- `create_scheduled_task(kind, when, name, body, command=None, is_agent_enabled=True, max_unanswered_runs=3)` — schedule a task.
   - `kind="once"`, `when` = ISO-8601 timezone-aware datetime, e.g.
     `"2026-05-12T09:00:00+10:00"`.
   - `kind="cron"`, `when` = 5-field cron expression, e.g. `"0 9 * * *"`
@@ -244,6 +280,10 @@ launch went").
     the user's local time yourself.
   - `name` is a short subject-style label. `body` is the prompt your
     future run will receive.
+  - `command` is optional bash run in `/workspace` before dispatch.
+  - `is_agent_enabled=False` sends command stdout directly as the email body.
+  - `max_unanswered_runs` pauses recurring user-visible nudges after that many
+    notifications without a real user reply.
 - `list_scheduled_tasks()` — list this assistant's active tasks (both
   ONCE and CRON). Useful before creating to avoid duplicates, and when
   the user asks "what reminders do I have set?".
@@ -284,6 +324,43 @@ create_scheduled_task(
 )
 ```
 
+Command-gated ambient check with agent polish:
+
+```
+create_scheduled_task(
+    kind="cron",
+    when="0 3 * * 4",
+    name="Nice weather idea for this weekend",
+    body="Use the command output as context. If there is a genuinely nice weekend idea, send Larry a short nudge. If not, reply exactly QUIETLY_EXIT.",
+    command="python automations/weekend_weather.py",
+    is_agent_enabled=True,
+)
+```
+
+Command-gated direct email:
+
+```
+create_scheduled_task(
+    kind="cron",
+    when="0 22 * * 0",
+    name="Weekly digest",
+    body="",
+    command="python automations/weekly_digest.py --email-body",
+    is_agent_enabled=False,
+)
+```
+
+Command script pattern:
+
+```bash
+python automations/check_condition.py
+case "$?" in
+  0) exit 0 ;;  # stdout has useful payload
+  1) exit 1 ;;  # stderr explains expected no-op
+  *) exit 2 ;;  # unexpected failure
+esac
+```
+
 ## Etiquette
 
 - Confirm details (when, what to say) with the user before scheduling if
@@ -292,6 +369,9 @@ create_scheduled_task(
   will fire (in their local time).
 - Don't stack duplicates — `list_scheduled_tasks` first if the user might
   already have a similar task.
+- For recurring nudges, keep the default `max_unanswered_runs=3` unless the
+  user explicitly wants persistent reminders. Set it lower for speculative
+  ambient checks and higher for important operational alerts.
 """
 
 

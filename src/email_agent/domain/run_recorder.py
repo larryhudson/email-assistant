@@ -137,6 +137,55 @@ class RunRecorder:
                 run_id=completed.run_id,
             )
 
+    async def record_quiet_exit(
+        self,
+        *,
+        run_id: str,
+        scope: AssistantScope,
+        steps: list[RunStepRecord],
+        usage: RunUsage,
+        metered_usage: list[MeteredUsage] | None = None,
+    ) -> None:
+        async with self._session_factory() as session:
+            run = await session.get(AgentRun, run_id)
+            if run is None:
+                raise LookupError(f"agent_run {run_id} not found")
+
+            run.status = "quiet_exited"
+            run.completed_at = datetime.now(UTC)
+            run.reply_message_id = None
+            run.error = None
+
+            for step in steps:
+                session.add(
+                    RunStep(
+                        id=f"s-{uuid.uuid4().hex[:8]}",
+                        run_id=run.id,
+                        kind=step.kind,
+                        input_summary=step.input_summary,
+                        output_summary=step.output_summary,
+                        cost_usd=step.cost_usd,
+                    )
+                )
+
+            session.add(
+                UsageLedger(
+                    id=f"u-{uuid.uuid4().hex[:8]}",
+                    assistant_id=run.assistant_id,
+                    run_id=run.id,
+                    provider="openai-compat",
+                    model=scope.model_name,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    cost_usd=_model_cost(usage, metered_usage or []),
+                    budget_period=datetime.now(UTC).strftime("%Y-%m"),
+                )
+            )
+            for item in metered_usage or []:
+                session.add(_usage_ledger_from_metered(run, item))
+
+            await session.commit()
+
     async def record_failure(
         self,
         run_id: str,
