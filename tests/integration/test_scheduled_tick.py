@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 
 from email_agent.config import Settings
 from email_agent.db.models import (
@@ -23,7 +23,11 @@ from email_agent.db.models import (
     EndUser,
     MessageIndex,
     Owner,
+    RunMemoryRecall,
+    RunStep,
+    ScheduledTaskFireRow,
     ScheduledTaskRow,
+    UsageLedger,
 )
 from email_agent.db.session import make_engine, make_session_factory, session_scope
 from email_agent.models.scheduled import ScheduledTaskKind, ScheduledTaskStatus
@@ -186,6 +190,19 @@ async def test_tick_fires_once_and_cron_against_real_postgres(tmp_path):
 
 async def _cleanup_assistant(factory, *, assistant_id: str, suffix: str) -> None:
     async with session_scope(factory) as s:
+        run_ids = select(AgentRun.id).where(AgentRun.assistant_id == assistant_id)
+        task_ids = select(ScheduledTaskRow.id).where(ScheduledTaskRow.assistant_id == assistant_id)
+        await s.execute(delete(RunStep).where(RunStep.run_id.in_(run_ids)))
+        await s.execute(delete(RunMemoryRecall).where(RunMemoryRecall.run_id.in_(run_ids)))
+        await s.execute(delete(UsageLedger).where(UsageLedger.run_id.in_(run_ids)))
+        await s.execute(
+            delete(ScheduledTaskFireRow).where(
+                or_(
+                    ScheduledTaskFireRow.scheduled_task_id.in_(task_ids),
+                    ScheduledTaskFireRow.agent_run_id.in_(run_ids),
+                )
+            )
+        )
         await s.execute(delete(AgentRun).where(AgentRun.assistant_id == assistant_id))
         await s.execute(
             delete(ScheduledTaskRow).where(ScheduledTaskRow.assistant_id == assistant_id)
