@@ -193,6 +193,18 @@ async def test_ensure_starter_files_does_not_overwrite_existing_identity() -> No
     assert await env.read_text("/workspace/IDENTITY.md") == "I am terse."
 
 
+async def test_ensure_starter_files_seeds_onboarding_skill() -> None:
+    """New assistants need tactical guidance for early interactions — restraint,
+    value-before-ask, no surveys. The skill self-gates via its description so
+    the agent only reaches for it when CONTEXT.md is sparse."""
+    env = InMemoryEnvironment()
+    await ensure_starter_files(env)
+
+    skills = await load_skills(env)
+    names = {s.name for s in skills}
+    assert "onboarding" in names
+
+
 async def test_ensure_starter_files_reseeds_identity_when_blanked() -> None:
     """A blank IDENTITY.md is restored to defaults — identity is the disposition
     anchor and an empty file would leave the model with no framing at all.
