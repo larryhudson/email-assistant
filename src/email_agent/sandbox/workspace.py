@@ -7,6 +7,7 @@ from email_agent.sandbox.skills import (
     ensure_starter_files,
     load_skills,
     read_context,
+    read_identity,
 )
 
 WORKSPACE_ROOT = "/workspace"
@@ -58,6 +59,9 @@ class AssistantWorkspace:
 
     async def read_context(self) -> str | None:
         return await read_context(self._env)
+
+    async def read_identity(self) -> str | None:
+        return await read_identity(self._env)
 
     async def ensure_starter_files(self) -> None:
         await ensure_starter_files(self._env)

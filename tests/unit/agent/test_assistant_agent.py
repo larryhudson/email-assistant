@@ -50,6 +50,7 @@ def _deps(
     skills_block: str = "",
     context_block: str = "",
     participants_block: str = "",
+    identity_block: str = "",
     scheduled_tasks: object | None = None,
     search: InMemorySearchAdapter | None = None,
     metered: list[MeteredUsage] | None = None,
@@ -86,6 +87,7 @@ def _deps(
         skills_block=skills_block,
         context_block=context_block,
         participants_block=participants_block,
+        identity_block=identity_block,
     )
 
 
@@ -491,6 +493,20 @@ def _capture_instructions() -> tuple[FunctionModel, dict[str, str | None]]:
         return ModelResponse(parts=[TextPart(content="ok")])
 
     return FunctionModel(fn), captured
+
+
+async def test_identity_block_is_injected_into_instructions() -> None:
+    """IDENTITY.md content rendered as a block must reach the live system prompt,
+    so the agent's disposition framing actually influences its behaviour."""
+    agent = AssistantAgent()
+    deps = _deps(identity_block="<identity_content>\nbe useful, not eager\n</identity_content>")
+
+    model, captured = _capture_instructions()
+    with agent.override_model(_scope(), model):
+        await agent.run(_scope(), prompt="hi", deps=deps)
+
+    assert captured["instructions"] is not None
+    assert "be useful, not eager" in captured["instructions"]
 
 
 async def test_context_block_is_injected_into_instructions() -> None:

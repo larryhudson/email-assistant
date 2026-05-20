@@ -97,6 +97,7 @@ class AgentDeps:
     skills_block: str = ""
     context_block: str = ""
     participants_block: str = ""
+    identity_block: str = ""
 
 
 @dataclass(frozen=True)

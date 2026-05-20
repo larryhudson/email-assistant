@@ -154,6 +154,7 @@ class AssistantAgent:
         @agent.instructions
         def workspace_context(ctx: RunContext[AgentDeps]) -> str:
             parts = [
+                ctx.deps.identity_block.strip(),
                 ctx.deps.context_block.strip(),
                 ctx.deps.participants_block.strip(),
                 ctx.deps.skills_block.strip(),

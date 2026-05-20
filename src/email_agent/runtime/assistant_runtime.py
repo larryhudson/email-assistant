@@ -72,6 +72,7 @@ from email_agent.models.scheduled import ScheduledTaskKind, ScheduledTaskStatus
 from email_agent.sandbox.skills import (
     SYSTEM_PROMPT_GUIDANCE,
     render_context_block,
+    render_identity_block,
     render_skills_block,
 )
 from email_agent.sandbox.workspace import AssistantWorkspace
@@ -358,6 +359,7 @@ class AssistantRuntime:
         skills = await workspace.load_skills()
         skills_block = render_skills_block(skills)
         context_block = render_context_block(await workspace.read_context())
+        identity_block = render_identity_block(await workspace.read_identity())
         _log.info(
             "run %s loaded %d skill(s) into prompt: %s",
             run_id,
@@ -405,6 +407,7 @@ class AssistantRuntime:
             for part in [
                 scope.system_prompt.strip(),
                 SYSTEM_PROMPT_GUIDANCE.strip(),
+                identity_block.strip(),
                 context_block.strip(),
                 participants_block.strip(),
                 skills_block.strip(),
@@ -443,6 +446,7 @@ class AssistantRuntime:
             skills_block=skills_block,
             context_block=context_block,
             participants_block=participants_block,
+            identity_block=identity_block,
         )
 
         # If a model_factory is wired in (production), apply it for the run;
