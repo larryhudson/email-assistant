@@ -89,7 +89,6 @@ async def _seed(session: AsyncSession) -> None:
             inbound_address="assistant-a1@assist.example.com",
             allowed_senders=["assistant-a1@assist.example.com"],
             model="m",
-            system_prompt="x",
         )
     )
     await session.commit()

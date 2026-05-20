@@ -60,7 +60,6 @@ async def _seed(session: AsyncSession) -> None:
             status="active",
             allowed_senders=["mum@example.com"],
             model="deepseek-flash",
-            system_prompt="be kind",
         )
     )
     await session.flush()

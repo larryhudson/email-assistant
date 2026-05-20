@@ -23,7 +23,6 @@ def _scope(assistant_id: str = "a-1", end_user_id: str = "u-1") -> AssistantScop
         tool_allowlist=("read",),
         budget_id="b-1",
         model_name="deepseek-flash",
-        system_prompt="be kind",
     )
 
 

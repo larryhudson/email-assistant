@@ -50,7 +50,6 @@ def _scope() -> AssistantScope:
         tool_allowlist=("read",),
         budget_id="b-1",
         model_name=_FIREWORKS_MODEL_ID,
-        system_prompt="be terse — one short sentence only.",
     )
 
 

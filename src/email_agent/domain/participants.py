@@ -1,10 +1,8 @@
 """Renders a participants block for the agent's system prompt.
 
 Identity (owner / end_user emails) flows in from the `Owner` + `EndUser`
-rows on every run, instead of being hardcoded into each assistant's
-`system_prompt`. That keeps the stored prompt generic, lets the same
-template serve multiple assistants, and means changing a user's email
-is a single SQL update — no prompt edit.
+rows on every run, so the same workspace template serves multiple
+assistants and changing a user's email is a single SQL update.
 """
 
 

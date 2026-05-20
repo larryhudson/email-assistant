@@ -38,7 +38,6 @@ def _scope(tool_allowlist: tuple[str, ...] | None = None) -> AssistantScope:
         or ("read", "write", "edit", "bash", "memory_search", "attach_file"),
         budget_id="b-1",
         model_name="test-model",
-        system_prompt="be kind",
     )
 
 
@@ -568,18 +567,6 @@ async def test_workspace_guidance_is_part_of_base_instructions() -> None:
     assert captured["instructions"] is not None
     assert "CONTEXT.md" in captured["instructions"]
     assert "skills" in captured["instructions"].lower()
-
-
-async def test_scope_system_prompt_still_present() -> None:
-    agent = AssistantAgent()
-    deps = _deps()
-
-    model, captured = _capture_instructions()
-    with agent.override_model(_scope(), model):
-        await agent.run(_scope(), prompt="hi", deps=deps)
-
-    assert captured["instructions"] is not None
-    assert "be kind" in captured["instructions"]
 
 
 async def test_code_mode_run_code_routes_workspace_tools_through_toolset() -> None:

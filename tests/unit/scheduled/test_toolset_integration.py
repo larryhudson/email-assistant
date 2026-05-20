@@ -31,7 +31,6 @@ async def _seed(session: AsyncSession) -> None:
             inbound_address="a@x.com",
             allowed_senders=[],
             model="m",
-            system_prompt="x",
         )
     )
     session.add(
@@ -41,7 +40,6 @@ async def _seed(session: AsyncSession) -> None:
             inbound_address="b@x.com",
             allowed_senders=[],
             model="m",
-            system_prompt="x",
         )
     )
     session.add(

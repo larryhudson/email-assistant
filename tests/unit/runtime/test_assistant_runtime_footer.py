@@ -51,7 +51,6 @@ async def _seed_assistant(session: AsyncSession) -> None:
             status="active",
             allowed_senders=["mum@example.com"],
             model="test-model",
-            system_prompt="be kind",
         )
     )
     session.add(
@@ -79,7 +78,6 @@ def _scope() -> AssistantScope:
         tool_allowlist=("read", "write", "edit", "bash", "memory_search", "attach_file"),
         budget_id="b-1",
         model_name="test-model",
-        system_prompt="be kind",
     )
 
 

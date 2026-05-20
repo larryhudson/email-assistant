@@ -35,7 +35,6 @@ async def _seed_assistant(session: AsyncSession, assistant_id: str = "a-1") -> N
             inbound_address=f"{assistant_id}@assist.example.com",
             allowed_senders=[],
             model="m",
-            system_prompt="be kind",
         )
     )
     await session.commit()
@@ -135,7 +134,6 @@ async def _seed_assistant_extra(session: AsyncSession, assistant_id: str) -> Non
             inbound_address=f"{assistant_id}@assist.example.com",
             allowed_senders=[],
             model="m",
-            system_prompt="x",
         )
     )
     await session.commit()

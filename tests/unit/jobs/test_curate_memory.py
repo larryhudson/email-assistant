@@ -50,7 +50,6 @@ async def _seed_run(session: AsyncSession) -> tuple[str, str, str]:
             status="active",
             allowed_senders=["mum@example.com"],
             model="test-model",
-            system_prompt="be kind",
         )
     )
     session.add(

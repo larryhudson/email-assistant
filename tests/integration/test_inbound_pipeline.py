@@ -89,7 +89,6 @@ async def test_round_trip_pipeline_persists_message_index_and_attachments(tmp_pa
                 status="active",
                 allowed_senders=[sender],
                 model="deepseek-flash",
-                system_prompt="be kind",
             )
         )
         await s.flush()

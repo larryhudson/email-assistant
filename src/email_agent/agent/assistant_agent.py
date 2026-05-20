@@ -67,13 +67,12 @@ class AssistantAgent:
         self._has_document_tools = has_document_tools
         self._use_code_mode = use_code_mode
         self._agents: dict[
-            tuple[str, str, tuple[str, ...], bool, bool, bool, bool], Agent[AgentDeps, str]
+            tuple[str, tuple[str, ...], bool, bool, bool, bool], Agent[AgentDeps, str]
         ] = {}
 
     def _agent_for(self, scope: AssistantScope) -> Agent[AgentDeps, str]:
         key = (
             scope.model_name,
-            scope.system_prompt,
             self._registered_tools(scope),
             self._has_memory,
             self._has_web_search,
@@ -147,7 +146,7 @@ class AssistantAgent:
             model=TestModel(),
             deps_type=AgentDeps,
             output_type=str,
-            instructions=[scope.system_prompt, SYSTEM_PROMPT_GUIDANCE],
+            instructions=[SYSTEM_PROMPT_GUIDANCE],
             capabilities=capabilities,
         )
 

@@ -39,7 +39,6 @@ class AssistantScope(BaseModel):
     tool_allowlist: tuple[str, ...]
     budget_id: str
     model_name: str
-    system_prompt: str
 
     def is_sender_allowed(self, email: str) -> bool:
         """True if the sender is in this assistant's allowlist (case-insensitive).
@@ -76,5 +75,4 @@ class AssistantScope(BaseModel):
             tool_allowlist=tuple(scope_row.tool_allowlist),
             budget_id=scope_row.budget_id,
             model_name=assistant.model,
-            system_prompt=assistant.system_prompt,
         )

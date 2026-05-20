@@ -75,7 +75,6 @@ class Assistant(Base):
     status: Mapped[str] = mapped_column(String(16), default="active")
     allowed_senders: Mapped[list[str]] = mapped_column(JSON, default=list)
     model: Mapped[str] = mapped_column(String(64))
-    system_prompt: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     scope: Mapped["AssistantScopeRow"] = relationship(back_populates="assistant", uselist=False)

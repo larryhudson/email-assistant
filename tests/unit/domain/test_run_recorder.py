@@ -44,7 +44,6 @@ def _scope() -> AssistantScope:
         tool_allowlist=("read",),
         budget_id="b-1",
         model_name="deepseek-flash",
-        system_prompt="be kind",
     )
 
 
@@ -74,7 +73,6 @@ async def _seed_run(
             status="active",
             allowed_senders=["mum@example.com"],
             model="deepseek-flash",
-            system_prompt="be kind",
         )
     )
     session.add(

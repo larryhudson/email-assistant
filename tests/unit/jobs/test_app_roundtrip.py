@@ -142,7 +142,6 @@ async def test_curate_memory_defer_then_worker_invokes_impl(
                 status="active",
                 allowed_senders=["mum@example.com"],
                 model="t",
-                system_prompt="be kind",
             )
         )
         session.add(

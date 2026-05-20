@@ -28,7 +28,6 @@ def test_assistant_scope_carries_owner_chain():
         tool_allowlist=("read", "write", "edit", "bash", "memory_search", "attach_file"),
         budget_id="b-1",
         model_name="deepseek-flash",
-        system_prompt="You are kind.",
     )
     assert scope.is_sender_allowed("mum@example.com")
     assert not scope.is_sender_allowed("spam@example.com")
@@ -49,7 +48,6 @@ def test_assistant_scope_rejects_mutation():
         tool_allowlist=(),
         budget_id="b",
         model_name="m",
-        system_prompt="p",
     )
     with pytest.raises(ValidationError):
         scope.status = AssistantStatus.PAUSED
@@ -108,7 +106,6 @@ def test_assistant_scope_from_rows_flattens_three_rows():
         status="active",
         allowed_senders=["mum@example.com"],
         model="deepseek-flash",
-        system_prompt="be kind",
     )
     scope_row = AssistantScopeRow(
         assistant_id="a-1",
@@ -136,4 +133,3 @@ def test_assistant_scope_from_rows_flattens_three_rows():
     assert scope.tool_allowlist == ("read", "write")
     assert scope.budget_id == "b-1"
     assert scope.model_name == "deepseek-flash"
-    assert scope.system_prompt == "be kind"

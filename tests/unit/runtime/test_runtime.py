@@ -41,7 +41,6 @@ async def _seed_assistant(
             status="active",
             allowed_senders=[sender],
             model="deepseek-flash",
-            system_prompt="be kind",
         )
     )
     await session.flush()

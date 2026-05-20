@@ -48,7 +48,6 @@ async def _seed_assistant(
             status=status,
             allowed_senders=allowed_senders,
             model="deepseek-flash",
-            system_prompt="be kind",
         )
     )
     session.add(

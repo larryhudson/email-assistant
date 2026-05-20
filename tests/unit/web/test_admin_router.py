@@ -61,7 +61,6 @@ async def _seed_assistant(
             status="active",
             allowed_senders=[end_user_email],
             model=model,
-            system_prompt="be kind",
         )
     )
     session.add(

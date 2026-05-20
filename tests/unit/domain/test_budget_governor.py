@@ -43,7 +43,6 @@ async def _seed(
             status="active",
             allowed_senders=["mum@example.com"],
             model="deepseek-flash",
-            system_prompt="be kind",
         )
     )
     session.add(
@@ -85,7 +84,6 @@ def _scope() -> AssistantScope:
         tool_allowlist=("read",),
         budget_id="b-1",
         model_name="deepseek-flash",
-        system_prompt="be kind",
     )
 
 
@@ -175,7 +173,6 @@ async def test_governor_ignores_ledger_rows_outside_active_period(
                 status="active",
                 allowed_senders=["mum@example.com"],
                 model="deepseek-flash",
-                system_prompt="be kind",
             )
         )
         session.add(

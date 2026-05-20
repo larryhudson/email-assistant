@@ -30,7 +30,6 @@ async def test_insert_and_query_assistant():
                 end_user_id=user_id,
                 inbound_address=f"{asst_id}@example.com",
                 model="deepseek-flash",
-                system_prompt="be kind",
             )
         )
 

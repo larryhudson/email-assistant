@@ -230,18 +230,6 @@ def seed_assistant(
         "--model",
         help="Model id to record on the assistant row. Defaults to FIREWORKS_MODEL_ID.",
     ),
-    system_prompt: str | None = typer.Option(
-        None,
-        "--system-prompt",
-        help="System prompt string. Mutually exclusive with --system-prompt-file.",
-    ),
-    system_prompt_file: Path | None = typer.Option(
-        None,
-        "--system-prompt-file",
-        exists=True,
-        readable=True,
-        help="Read the system prompt from this file.",
-    ),
     allowed_senders: list[str] = typer.Option(
         None,
         "--allowed-sender",
@@ -257,14 +245,6 @@ def seed_assistant(
     existing assistant id). Useful for getting an assistant into the DB
     so `inject-email` can route to it.
     """
-    if system_prompt and system_prompt_file:
-        typer.secho("Use --system-prompt OR --system-prompt-file, not both.", fg="red")
-        raise typer.Exit(2)
-    prompt_text = (
-        system_prompt_file.read_text()
-        if system_prompt_file
-        else (system_prompt or "be helpful and concise.")
-    )
     senders = list(allowed_senders) if allowed_senders else [end_user_email]
     from decimal import Decimal as _Decimal
 
@@ -277,7 +257,6 @@ def seed_assistant(
             owner_email=owner_email,
             monthly_budget_usd=_Decimal(str(monthly_budget_usd)),
             model=model,
-            system_prompt=prompt_text,
             allowed_senders=senders,
             memory_namespace=memory_namespace,
         )
@@ -293,7 +272,6 @@ async def _seed_assistant(
     owner_email: str | None,
     monthly_budget_usd,  # Decimal at runtime (untyped to keep imports lazy in this module)
     model: str | None,
-    system_prompt: str,
     allowed_senders: list[str],
     memory_namespace: str | None,
 ) -> None:
@@ -376,7 +354,6 @@ async def _seed_assistant(
                 status="active",
                 allowed_senders=allowed_senders,
                 model=model_id,
-                system_prompt=system_prompt,
             )
         )
         session.add(

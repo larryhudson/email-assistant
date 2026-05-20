@@ -390,9 +390,8 @@ class AssistantRuntime:
         prompt = prompt_context.prompt
 
         # Render the participants block from scope so identity (owner +
-        # end-user emails) flows in from data, not from a hardcoded
-        # `system_prompt` string. Stored alongside the other dynamic blocks
-        # in the persisted prompt for admin-UI visibility.
+        # end-user emails) flows in from data. Stored alongside the other
+        # dynamic blocks in the persisted prompt for admin-UI visibility.
         participants_block = render_participants_block(
             owner_email=scope.owner_email,
             end_user_email=scope.end_user_email,
@@ -400,12 +399,11 @@ class AssistantRuntime:
 
         # Persist the fully-assembled system prompt + user prompt on the run
         # row so the admin UI can show exactly what the model saw. System
-        # order mirrors assistant_agent._build_agent: scope prompt, workspace
-        # guidance, then the dynamic context + participants + skills blocks.
+        # order mirrors assistant_agent._build_agent: workspace guidance,
+        # then the dynamic identity + context + participants + skills blocks.
         full_system_prompt = "\n\n".join(
             part
             for part in [
-                scope.system_prompt.strip(),
                 SYSTEM_PROMPT_GUIDANCE.strip(),
                 identity_block.strip(),
                 context_block.strip(),

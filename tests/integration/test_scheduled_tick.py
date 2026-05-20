@@ -61,7 +61,6 @@ async def test_tick_fires_once_and_cron_against_real_postgres(tmp_path):
                 status="active",
                 allowed_senders=[sender],
                 model="deepseek-flash",
-                system_prompt="be kind",
             )
         )
         await s.flush()
