@@ -75,6 +75,7 @@ from email_agent.sandbox.skills import (
     render_identity_block,
     render_skills_block,
 )
+from email_agent.sandbox.source_projection import DEFAULT_PROJECT_ROOT
 from email_agent.sandbox.workspace import AssistantWorkspace
 from email_agent.sandbox.workspace_provider import WorkspaceProvider
 from email_agent.scheduled.service import ScheduledTaskService
@@ -356,6 +357,7 @@ class AssistantRuntime:
         )
         await _project_workspace_emails(workspace, projection)
         await workspace.ensure_starter_files()
+        await workspace.project_source(DEFAULT_PROJECT_ROOT)
         skills = await workspace.load_skills()
         skills_block = render_skills_block(skills)
         context_block = render_context_block(await workspace.read_context())

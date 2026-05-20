@@ -9,6 +9,7 @@ from email_agent.sandbox.skills import (
     read_context,
     read_identity,
 )
+from email_agent.sandbox.source_projection import project_source
 
 WORKSPACE_ROOT = "/workspace"
 EMAILS_DIR = "/workspace/emails"
@@ -65,6 +66,9 @@ class AssistantWorkspace:
 
     async def ensure_starter_files(self) -> None:
         await ensure_starter_files(self._env)
+
+    async def project_source(self, source_root: Path) -> None:
+        await project_source(self._env, source_root)
 
     async def assert_agent_write_allowed(self, path: str) -> None:
         normalized = self._workspace_path(path)
