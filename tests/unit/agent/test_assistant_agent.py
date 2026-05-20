@@ -556,7 +556,9 @@ async def test_participants_block_is_injected_into_instructions() -> None:
 
 
 async def test_workspace_guidance_is_part_of_base_instructions() -> None:
-    """Even with empty skills/context, the agent is told about CONTEXT.md & skills."""
+    """The static guidance block tells the agent which workspace paths matter
+    and how each is treated — IDENTITY (editable disposition), CONTEXT (user
+    notes), skills (playbooks), source (read-only own code)."""
     agent = AssistantAgent()
     deps = _deps()
 
@@ -565,8 +567,11 @@ async def test_workspace_guidance_is_part_of_base_instructions() -> None:
         await agent.run(_scope(), prompt="hi", deps=deps)
 
     assert captured["instructions"] is not None
-    assert "CONTEXT.md" in captured["instructions"]
-    assert "skills" in captured["instructions"].lower()
+    text = captured["instructions"]
+    assert "IDENTITY.md" in text
+    assert "CONTEXT.md" in text
+    assert "skills" in text.lower()
+    assert "/workspace/source" in text
 
 
 async def test_code_mode_run_code_routes_workspace_tools_through_toolset() -> None:
