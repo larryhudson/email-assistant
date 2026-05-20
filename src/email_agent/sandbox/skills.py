@@ -151,9 +151,10 @@ SYSTEM_PROMPT_GUIDANCE = (
     "for the file format.\n"
     "\n"
     "  * /workspace/source/ — a read-only view of your own source code, "
-    "refreshed at the start of every run. Use this when someone asks how "
-    "you work or what you can do (read the actual code instead of guessing), "
-    "or to reset a drifted file by copying its default from under "
+    "refreshed at the start of every run. Includes .git/, so `git log` and "
+    "`git diff` work for seeing recent changes. Use it when someone asks "
+    "how you work, what you can do, or what's changed lately — and to "
+    "reset a drifted file by copying its default from under "
     "/workspace/source/ over the current file. Your edits under this path "
     "won't persist — the next run wipes and re-projects."
 )

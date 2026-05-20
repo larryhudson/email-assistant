@@ -30,17 +30,40 @@ def _find_project_root(start: Path) -> Path:
 # at an explicit checkout).
 DEFAULT_PROJECT_ROOT = _find_project_root(Path(__file__).resolve())
 
-_EXCLUDED_DIR_NAMES = frozenset({"__pycache__", "node_modules", "data", "dist", "build", "htmlcov"})
+_EXCLUDED_DIR_NAMES = frozenset(
+    {
+        "__pycache__",
+        "node_modules",
+        "data",
+        "dist",
+        "build",
+        "htmlcov",
+        ".venv",
+        ".ruff_cache",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".idea",
+        ".vscode",
+    }
+)
 _EXCLUDED_FILE_SUFFIXES = frozenset({".pyc", ".log"})
+_EXCLUDED_FILE_NAMES = frozenset({".DS_Store"})
+
+
+def _is_env_file(name: str) -> bool:
+    """Block .env and .env.<anything> so secrets never reach the projection."""
+    return name == ".env" or name.startswith(".env.")
 
 
 def _is_excluded(rel: Path) -> bool:
     for part in rel.parts:
-        if part.startswith("."):
-            return True
         if part in _EXCLUDED_DIR_NAMES:
             return True
-    return rel.suffix in _EXCLUDED_FILE_SUFFIXES
+    if rel.suffix in _EXCLUDED_FILE_SUFFIXES:
+        return True
+    if rel.name in _EXCLUDED_FILE_NAMES:
+        return True
+    return _is_env_file(rel.name)
 
 
 def _read_source_files(source_root: Path) -> list[tuple[str, bytes]]:
