@@ -3,6 +3,7 @@ from email_agent.sandbox.skills import (
     ensure_starter_files,
     load_skills,
     read_context,
+    read_identity,
     render_context_block,
     render_skills_block,
 )
@@ -64,6 +65,20 @@ async def test_read_context_returns_stripped_content() -> None:
     await env.write_text("/workspace/CONTEXT.md", "\nuser likes brevity\n")
 
     assert await read_context(env) == "user likes brevity"
+
+
+async def test_ensure_starter_files_seeds_identity_with_moldability_frame() -> None:
+    """Every new workspace gets an IDENTITY.md seeded with the moldability ethos.
+
+    The seed needs to carry the framing that the agent is shaped over time by the
+    people it works for — that's the load-bearing claim users will rely on.
+    """
+    env = InMemoryEnvironment()
+    await ensure_starter_files(env)
+
+    assert await env.exists("/workspace/IDENTITY.md")
+    body = await env.read_text("/workspace/IDENTITY.md")
+    assert "shaped over time" in body
 
 
 async def test_ensure_starter_files_creates_context_and_writing_skill_once() -> None:
@@ -167,10 +182,40 @@ def test_render_context_block_empty_when_none() -> None:
     assert render_context_block(None) == ""
 
 
-def test_render_context_block_labels_section() -> None:
-    block = render_context_block("user is in AEST")
-    assert "CONTEXT.md" in block
-    assert "user is in AEST" in block
+async def test_ensure_starter_files_does_not_overwrite_existing_identity() -> None:
+    """Agent or operator edits to IDENTITY.md must survive a re-seed."""
+    env = InMemoryEnvironment()
+    await env.mkdir("/workspace", parents=True)
+    await env.write_text("/workspace/IDENTITY.md", "I am terse.")
+
+    await ensure_starter_files(env)
+
+    assert await env.read_text("/workspace/IDENTITY.md") == "I am terse."
+
+
+async def test_ensure_starter_files_reseeds_identity_when_blanked() -> None:
+    """A blank IDENTITY.md is restored to defaults — identity is the disposition
+    anchor and an empty file would leave the model with no framing at all.
+
+    Unlike CONTEXT.md (where empty means "I don't know much about the user yet"),
+    an empty IDENTITY is never a legitimate state.
+    """
+    env = InMemoryEnvironment()
+    await env.mkdir("/workspace", parents=True)
+    await env.write_text("/workspace/IDENTITY.md", "   \n  \n")
+
+    await ensure_starter_files(env)
+
+    body = await env.read_text("/workspace/IDENTITY.md")
+    assert "shaped over time" in body
+
+
+async def test_read_identity_returns_none_when_missing_or_empty() -> None:
+    env = InMemoryEnvironment()
+    assert await read_identity(env) is None
+
+    await env.write_text("/workspace/IDENTITY.md", "   \n  ")
+    assert await read_identity(env) is None
 
 
 async def test_workspace_proxies_skills_and_context() -> None:

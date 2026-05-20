@@ -22,6 +22,7 @@ from email_agent.sandbox.environment import SandboxEnvironment
 
 SKILLS_DIR = "/workspace/skills"
 CONTEXT_PATH = "/workspace/CONTEXT.md"
+IDENTITY_PATH = "/workspace/IDENTITY.md"
 
 
 @dataclass(frozen=True)
@@ -55,10 +56,23 @@ async def read_context(env: SandboxEnvironment) -> str | None:
     return stripped or None
 
 
+async def read_identity(env: SandboxEnvironment) -> str | None:
+    if not await env.exists(IDENTITY_PATH):
+        return None
+    text = await env.read_text(IDENTITY_PATH)
+    stripped = text.strip()
+    return stripped or None
+
+
 async def ensure_starter_files(env: SandboxEnvironment) -> None:
     """Idempotent seed: starter skill + an empty CONTEXT.md template."""
     if not await env.exists(CONTEXT_PATH):
         await env.write_text(CONTEXT_PATH, _STARTER_CONTEXT_MD)
+
+    # IDENTITY.md anchors the agent's disposition; an empty file would leave the
+    # model with no framing at all, so reseed on blank as well as on missing.
+    if not await env.exists(IDENTITY_PATH) or not (await env.read_text(IDENTITY_PATH)).strip():
+        await env.write_text(IDENTITY_PATH, _STARTER_IDENTITY_MD)
 
     writing_skill = f"{SKILLS_DIR}/writing-skills/SKILL.md"
     if not await env.exists(writing_skill):
@@ -101,7 +115,13 @@ def render_skills_block(skills: list[Skill]) -> str:
 def render_context_block(context: str | None) -> str:
     if context is None:
         return ""
-    return "# CONTEXT.md (long-term notes about the user)\n\n" + context.strip()
+    return f"<context_content>\n{context.strip()}\n</context_content>"
+
+
+def render_identity_block(identity: str | None) -> str:
+    if identity is None:
+        return ""
+    return f"<identity_content>\n{identity.strip()}\n</identity_content>"
 
 
 SYSTEM_PROMPT_GUIDANCE = (
@@ -139,6 +159,36 @@ def _parse_skill(raw: str, *, default_name: str) -> tuple[str, str, str]:
                     description = value
 
     return name, description, body
+
+
+_STARTER_IDENTITY_MD = """# Who you are
+
+This file is your starting disposition. As you learn what serves the people
+you work for, feel free to rewrite it — you can edit it like any other file
+in your workspace, and the whole file is injected into your system prompt
+every run.
+
+---
+
+You're not a finished product — you're being shaped over time by the people
+you work for. Their corrections, their reactions, what they tell you about
+themselves, even what they ignore — all of it is how you learn to be useful
+to them specifically. Treat that shaping as the core of the relationship,
+not friction to be cleared before "real" work begins.
+
+Be useful, not eager. Restraint is rarely the wrong call. If you're not
+confident a message is worth the person's attention, don't send it — a quiet
+day is better than a noisy one, and you cost real energy and money to run,
+so make your turns count.
+
+Be calibrated about what you actually know. Acknowledge uncertainty when
+it's there; if you're guessing, say so. Ask for context when you need it,
+but pick your moments — asking is itself a small interruption.
+
+Approach the people you work for the way a smart, caring friend would: take
+them seriously as intelligent adults, speak frankly, and care about them as
+people rather than performing helpfulness.
+"""
 
 
 _STARTER_CONTEXT_MD = """Long-term notes about the user. Keep this short and high-signal. Update via
@@ -567,12 +617,15 @@ attach_file("docs/brochure-fixed.docx")
 
 __all__ = [
     "CONTEXT_PATH",
+    "IDENTITY_PATH",
     "SKILLS_DIR",
     "SYSTEM_PROMPT_GUIDANCE",
     "Skill",
     "ensure_starter_files",
     "load_skills",
     "read_context",
+    "read_identity",
     "render_context_block",
+    "render_identity_block",
     "render_skills_block",
 ]
