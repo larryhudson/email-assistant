@@ -7,6 +7,8 @@ from pathlib import Path
 
 import typer
 
+from email_agent.agent.tool_registry import SUPPORTED_ASSISTANT_TOOLS
+
 app = typer.Typer(help="Email Assistant operator CLI", no_args_is_help=True)
 
 
@@ -360,18 +362,7 @@ async def _seed_assistant(
             AssistantScopeRow(
                 assistant_id=assistant_id,
                 memory_namespace=memory_namespace or assistant_id,
-                tool_allowlist=[
-                    "read",
-                    "read_image",
-                    "write",
-                    "edit",
-                    "bash",
-                    "memory_search",
-                    "attach_file",
-                    "list_scheduled_tasks",
-                    "create_scheduled_task",
-                    "delete_scheduled_task",
-                ],
+                tool_allowlist=list(SUPPORTED_ASSISTANT_TOOLS),
                 budget_id=budget_id,
             )
         )
