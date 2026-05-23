@@ -1267,3 +1267,184 @@ async def test_execute_run_notifies_on_failure_after_agent_succeeded(
         run = (await session.execute(select(AgentRun))).scalar_one()
         assert run.status == "failed"
         assert "smtp explosion" in (run.error or "")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "RED for same-thread Pydantic AI history: runtime does not yet pass "
+        "previous-run ModelMessages into the next agent.run as message_history."
+    ),
+)
+async def test_same_thread_followup_sees_prior_run_tool_history(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """A same-thread follow-up email must let the agent answer using prior
+    run context that was never visible in the outbound reply.
+
+    Run 1: the inbound carries a secret token ACTION-TOKEN-XYZ in its body.
+    The model reads the projected email via run_code (so the token enters the
+    Pydantic AI tool-return history) and replies with a terse acknowledgement
+    that does NOT echo the token in the outbound body.
+
+    Run 2: a follow-up arrives in the same email thread asking what the
+    assistant acted on. The token is not in the new inbound, not in the
+    outbound from run 1, and not in any prompt the runtime assembles today.
+    The only place ACTION-TOKEN-XYZ is reachable from is run 1's
+    ModelMessage history (specifically the ToolReturnPart for run_code).
+
+    The model double for run 2 simulates a real model by walking its received
+    `message_history` for a ToolReturnPart that carries the token; if found,
+    it replies with a sentence echoing the token. The assertion is on the
+    user-visible outbound reply body, not the message_history shape.
+
+    Until the runtime threads prior-run ModelMessages into the next
+    `agent.run(..., message_history=...)`, run 2 receives no history, the
+    model double cannot find the token, and the outbound reply admits it has
+    no prior context — so this test fails for the right behavioural reason.
+    """
+    import re
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    email_provider = InMemoryEmailProvider()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    agent = AssistantAgent()
+
+    msg_counter = {"n": 0}
+    prov_counter = {"n": 0}
+
+    def _next_message_id() -> str:
+        msg_counter["n"] += 1
+        return f"<run-{msg_counter['n']}@assistants.example.com>"
+
+    def _next_provider_id() -> str:
+        prov_counter["n"] += 1
+        return f"prov-out-{prov_counter['n']}"
+
+    runtime = AssistantRuntime(
+        sqlite_session_factory,
+        attachments_root=tmp_path / "attachments",
+        email_provider=email_provider,
+        workspace_provider=StaticWorkspaceProvider(workspace),
+        memory=InMemoryMemoryAdapter(),
+        agent=agent,
+        projector=EmailWorkspaceProjector(run_inputs_root=tmp_path / "run_inputs"),
+        recorder=RunRecorder(sqlite_session_factory),
+        budget_governor=BudgetGovernor(sqlite_session_factory),
+        envelope_builder=ReplyEnvelopeBuilder(),
+        message_id_factory=_next_message_id,
+        provider_message_id_factory=_next_provider_id,
+    )
+
+    token = "ACTION-TOKEN-XYZ"
+
+    inbound_1 = NormalizedInboundEmail(
+        provider_message_id="prov-in-1",
+        message_id_header="<m1@x>",
+        from_email="mum@example.com",
+        to_emails=["mum@assistants.example.com"],
+        subject="please action this",
+        body_text=f"please action {token}",
+        received_at=datetime(2026, 5, 10, 12, 0, tzinfo=UTC),
+    )
+    await runtime.accept_inbound(inbound_1)
+    run_1_id = await _run_id_for(sqlite_session_factory)
+
+    # Model 1: code mode -> run_code reads the projected message file, the
+    # tool return carries the token through Pydantic AI's message history,
+    # then the final reply is a terse ack that does NOT echo the token.
+    state_1 = {"called": False}
+
+    async def model_1(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if not state_1["called"]:
+            state_1["called"] = True
+            text = " ".join(
+                part.content
+                for msg in messages
+                for part in getattr(msg, "parts", [])
+                if hasattr(part, "content") and isinstance(part.content, str)
+            )
+            match = re.search(r"emails/[^\s'\"]+\.md", text)
+            assert match is not None, f"no projected path in prompt: {text!r}"
+            code = f"message = await read(path={match.group(0)!r})\nmessage"
+            return ModelResponse(parts=[ToolCallPart(tool_name="run_code", args={"code": code})])
+        for msg in reversed(messages):
+            for part in getattr(msg, "parts", []):
+                if isinstance(part, ToolReturnPart) and part.tool_name == "run_code":
+                    assert token in str(part.content), "token should be in run_code return"
+                    return ModelResponse(parts=[TextPart(content="OK, on it.")])
+        return ModelResponse(parts=[TextPart(content="ok")])
+
+    with agent.override_model(_scope(), FunctionModel(model_1)):
+        outcome_1 = await runtime.execute_run(run_1_id)
+    assert isinstance(outcome_1, Completed)
+    assert len(email_provider.sent) == 1
+    assert token not in email_provider.sent[0].body_text, (
+        "preconditions: outbound 1 must not leak the token; otherwise run 2 "
+        "could 'know' the answer from the email thread rather than from "
+        "prior-run message_history"
+    )
+
+    # Inbound 2: same thread (in_reply_to_header points at inbound 1).
+    # Body does NOT mention the token.
+    inbound_2 = NormalizedInboundEmail(
+        provider_message_id="prov-in-2",
+        message_id_header="<m2@x>",
+        in_reply_to_header="<m1@x>",
+        references_headers=["<m1@x>"],
+        from_email="mum@example.com",
+        to_emails=["mum@assistants.example.com"],
+        subject="Re: please action this",
+        body_text="what was the thing you actioned earlier?",
+        received_at=datetime(2026, 5, 10, 13, 0, tzinfo=UTC),
+    )
+    await runtime.accept_inbound(inbound_2)
+
+    async with sqlite_session_factory() as session:
+        run_ids = (
+            (await session.execute(select(AgentRun.id).order_by(AgentRun.started_at, AgentRun.id)))
+            .scalars()
+            .all()
+        )
+    assert len(run_ids) == 2, run_ids
+    run_2_id = run_ids[1]
+    assert run_2_id != run_1_id
+
+    # Model 2: a real model would answer follow-ups by reading the
+    # message_history it was handed. Inspect received messages for any
+    # ToolReturnPart that carries the token — that is the previous run's
+    # tool output threaded in by `message_history=`.
+    captured_history_seen_token: list[bool] = []
+
+    async def model_2(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        found = False
+        for msg in messages:
+            for part in getattr(msg, "parts", []):
+                if isinstance(part, ToolReturnPart) and token in str(part.content):
+                    found = True
+                    break
+            if found:
+                break
+        captured_history_seen_token.append(found)
+        if found:
+            return ModelResponse(
+                parts=[TextPart(content=f"Earlier you asked me to action {token}.")]
+            )
+        return ModelResponse(parts=[TextPart(content="I have no prior context for that.")])
+
+    with agent.override_model(_scope(), FunctionModel(model_2)):
+        outcome_2 = await runtime.execute_run(run_2_id)
+    assert isinstance(outcome_2, Completed)
+
+    assert len(email_provider.sent) == 2
+    second_reply = email_provider.sent[1].body_text
+    # User-visible contract: the follow-up reply explains the prior
+    # tool-backed action by name. This only works if run 2 received run 1's
+    # ModelMessage history.
+    assert token in second_reply, (
+        f"second reply must reference the prior tool-backed action by name; got: {second_reply!r}"
+    )
+    assert "no prior context" not in second_reply
