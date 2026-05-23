@@ -591,6 +591,9 @@ async def test_record_quiet_exit_persists_message_history(
 ):
     """Quiet-exit runs still produced model + tool messages; persist those so
     a later same-thread run can still resume against the silent run's context.
+
+    Round-trips through the loader rather than poking the raw JSON: it's the
+    deserialized form the next agent run actually consumes.
     """
     from pydantic_ai.messages import (
         ModelRequest,
@@ -598,6 +601,8 @@ async def test_record_quiet_exit_persists_message_history(
         TextPart,
         UserPromptPart,
     )
+
+    from email_agent.agent.history import deserialize_message_history
 
     async with sqlite_session_factory() as session:
         run_id, _ = await _seed_run(session, tmp_path=tmp_path)
@@ -620,9 +625,11 @@ async def test_record_quiet_exit_persists_message_history(
         run = (await session.execute(select(AgentRun))).scalar_one()
         assert run.status == "quiet_exited"
         assert run.message_history is not None
-        # Crude shape check: list[dict] with a `parts` key in each entry.
-        assert len(run.message_history) == 2
-        assert all("parts" in entry for entry in run.message_history)
+        rehydrated = deserialize_message_history(run.message_history)
+        assert [type(m).__name__ for m in rehydrated] == ["ModelRequest", "ModelResponse"]
+        final_text = rehydrated[-1].parts[-1]
+        assert isinstance(final_text, TextPart)
+        assert final_text.content == "QUIETLY_EXIT"
 
 
 @pytest.mark.parametrize("missing_run_id", ["does-not-exist"])

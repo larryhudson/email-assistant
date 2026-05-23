@@ -1269,43 +1269,17 @@ async def test_execute_run_notifies_on_failure_after_agent_succeeded(
         assert "smtp explosion" in (run.error or "")
 
 
-async def test_same_thread_followup_sees_prior_run_tool_history(
+async def _make_history_runtime(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
+    *,
     tmp_path: Path,
-):
-    """A same-thread follow-up email must let the agent answer using prior
-    run context that was never visible in the outbound reply.
-
-    Run 1: the inbound carries a secret token ACTION-TOKEN-XYZ in its body.
-    The model reads the projected email via run_code (so the token enters the
-    Pydantic AI tool-return history) and replies with a terse acknowledgement
-    that does NOT echo the token in the outbound body.
-
-    Run 2: a follow-up arrives in the same email thread asking what the
-    assistant acted on. The token is not in the new inbound, not in the
-    outbound from run 1, and not in any prompt the runtime assembles today.
-    The only place ACTION-TOKEN-XYZ is reachable from is run 1's
-    ModelMessage history (specifically the ToolReturnPart for run_code).
-
-    The model double for run 2 simulates a real model by walking its received
-    `message_history` for a ToolReturnPart that carries the token; if found,
-    it replies with a sentence echoing the token. The assertion is on the
-    user-visible outbound reply body, not the message_history shape.
-
-    Until the runtime threads prior-run ModelMessages into the next
-    `agent.run(..., message_history=...)`, run 2 receives no history, the
-    model double cannot find the token, and the outbound reply admits it has
-    no prior context — so this test fails for the right behavioural reason.
+    email_provider: InMemoryEmailProvider,
+    workspace: AssistantWorkspace,
+    agent: AssistantAgent,
+) -> AssistantRuntime:
+    """Build a runtime with counter-based outbound id factories so multiple
+    runs in a single test produce distinct Message-IDs / provider ids.
     """
-    import re
-
-    async with sqlite_session_factory() as session:
-        await _seed_assistant(session)
-
-    email_provider = InMemoryEmailProvider()
-    workspace = AssistantWorkspace(InMemoryEnvironment())
-    agent = AssistantAgent()
-
     msg_counter = {"n": 0}
     prov_counter = {"n": 0}
 
@@ -1317,7 +1291,7 @@ async def test_same_thread_followup_sees_prior_run_tool_history(
         prov_counter["n"] += 1
         return f"prov-out-{prov_counter['n']}"
 
-    runtime = AssistantRuntime(
+    return AssistantRuntime(
         sqlite_session_factory,
         attachments_root=tmp_path / "attachments",
         email_provider=email_provider,
@@ -1332,109 +1306,232 @@ async def test_same_thread_followup_sees_prior_run_tool_history(
         provider_message_id_factory=_next_provider_id,
     )
 
-    token = "ACTION-TOKEN-XYZ"
+
+def _account_lookup_first_run_model(secret: str) -> FunctionModel:
+    """Model double for run 1: reads a workspace note via code-mode run_code,
+    learns the secret from the tool return, and replies with a terse ack
+    that does not echo it. The secret is in the workspace file, not the
+    inbound email body, so it can only enter pydantic-ai history via the
+    tool return.
+    """
+    state = {"called": False}
+
+    async def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if not state["called"]:
+            state["called"] = True
+            code = "value = await read(path='notes/account.txt')\nvalue"
+            return ModelResponse(parts=[ToolCallPart(tool_name="run_code", args={"code": code})])
+        for msg in reversed(messages):
+            for part in getattr(msg, "parts", []):
+                if isinstance(part, ToolReturnPart) and part.tool_name == "run_code":
+                    assert secret in str(part.content), (
+                        "the workspace note must surface the secret only via the tool return"
+                    )
+                    return ModelResponse(parts=[TextPart(content="Noted, will keep it on file.")])
+        return ModelResponse(parts=[TextPart(content="ok")])
+
+    return FunctionModel(fn)
+
+
+def _account_recall_followup_model(
+    secret: str, *, history_inspections: list[bool]
+) -> FunctionModel:
+    """Model double for the follow-up run: a real model would answer using
+    whatever message_history the runtime hands it. Inspect received messages
+    for the secret in any prior ToolReturnPart and echo it back if found.
+    """
+
+    async def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        found = any(
+            isinstance(part, ToolReturnPart) and secret in str(part.content)
+            for msg in messages
+            for part in getattr(msg, "parts", [])
+        )
+        history_inspections.append(found)
+        if found:
+            return ModelResponse(parts=[TextPart(content=f"Your account on file is {secret}.")])
+        return ModelResponse(parts=[TextPart(content="I have no prior context for that.")])
+
+    return FunctionModel(fn)
+
+
+async def test_same_thread_followup_reply_answers_using_prior_tool_lookup(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """Product contract: when a user replies in the same email thread asking
+    about something the assistant looked up in a previous run, the assistant
+    can answer — even when the answer was never visible in the email transcript.
+
+    Setup engineered so the secret is tool-output-only:
+    - Pre-seed a workspace note `notes/account.txt` containing ACCOUNT-99887.
+    - Inbound 1 mentions only the *path* ("check notes/account.txt"); the
+      number itself is not in the inbound body, not in the outbound reply,
+      and not in any projected prior email the runtime would mount for run 2.
+    - Inbound 2 is a real reply to the assistant's outbound `Message-ID` and
+      asks "what's my account number on file?" — also without the number.
+
+    Run 2's reply can only contain ACCOUNT-99887 if the runtime threaded
+    run 1's pydantic-ai history into `agent.run(..., message_history=...)`,
+    so the model double saw the prior tool return.
+    """
+    secret = "ACCOUNT-99887"
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    await workspace.environment.write_text("notes/account.txt", secret)
+
+    email_provider = InMemoryEmailProvider()
+    agent = AssistantAgent()
+    runtime = await _make_history_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        workspace=workspace,
+        agent=agent,
+    )
 
     inbound_1 = NormalizedInboundEmail(
         provider_message_id="prov-in-1",
         message_id_header="<m1@x>",
         from_email="mum@example.com",
         to_emails=["mum@assistants.example.com"],
-        subject="please action this",
-        body_text=f"please action {token}",
+        subject="customer record",
+        body_text="please check notes/account.txt and keep my account on file",
         received_at=datetime(2026, 5, 10, 12, 0, tzinfo=UTC),
     )
+    assert secret not in inbound_1.body_text, "precondition: secret is not in the inbound"
+
     await runtime.accept_inbound(inbound_1)
     run_1_id = await _run_id_for(sqlite_session_factory)
 
-    # Model 1: code mode -> run_code reads the projected message file, the
-    # tool return carries the token through Pydantic AI's message history,
-    # then the final reply is a terse ack that does NOT echo the token.
-    state_1 = {"called": False}
-
-    async def model_1(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        if not state_1["called"]:
-            state_1["called"] = True
-            text = " ".join(
-                part.content
-                for msg in messages
-                for part in getattr(msg, "parts", [])
-                if hasattr(part, "content") and isinstance(part.content, str)
-            )
-            match = re.search(r"emails/[^\s'\"]+\.md", text)
-            assert match is not None, f"no projected path in prompt: {text!r}"
-            code = f"message = await read(path={match.group(0)!r})\nmessage"
-            return ModelResponse(parts=[ToolCallPart(tool_name="run_code", args={"code": code})])
-        for msg in reversed(messages):
-            for part in getattr(msg, "parts", []):
-                if isinstance(part, ToolReturnPart) and part.tool_name == "run_code":
-                    assert token in str(part.content), "token should be in run_code return"
-                    return ModelResponse(parts=[TextPart(content="OK, on it.")])
-        return ModelResponse(parts=[TextPart(content="ok")])
-
-    with agent.override_model(_scope(), FunctionModel(model_1)):
+    with agent.override_model(_scope(), _account_lookup_first_run_model(secret)):
         outcome_1 = await runtime.execute_run(run_1_id)
     assert isinstance(outcome_1, Completed)
     assert len(email_provider.sent) == 1
-    assert token not in email_provider.sent[0].body_text, (
-        "preconditions: outbound 1 must not leak the token; otherwise run 2 "
-        "could 'know' the answer from the email thread rather than from "
-        "prior-run message_history"
+    outbound_1 = email_provider.sent[0]
+    assert secret not in outbound_1.body_text, (
+        "precondition: outbound 1 must not leak the secret; otherwise run 2 could 'know' "
+        "the answer from the email thread rather than from prior-run tool history"
     )
 
-    # Inbound 2: same thread (in_reply_to_header points at inbound 1).
-    # Body does NOT mention the token.
+    # Reply to the assistant's outbound Message-ID — the realistic
+    # user-replies-to-assistant path the threading logic must cover.
     inbound_2 = NormalizedInboundEmail(
         provider_message_id="prov-in-2",
         message_id_header="<m2@x>",
-        in_reply_to_header="<m1@x>",
-        references_headers=["<m1@x>"],
+        in_reply_to_header=outbound_1.message_id_header,
+        references_headers=["<m1@x>", outbound_1.message_id_header],
         from_email="mum@example.com",
         to_emails=["mum@assistants.example.com"],
-        subject="Re: please action this",
-        body_text="what was the thing you actioned earlier?",
+        subject="Re: customer record",
+        body_text="quick check — what's my account number on file?",
         received_at=datetime(2026, 5, 10, 13, 0, tzinfo=UTC),
     )
+    assert secret not in inbound_2.body_text, "precondition: secret is not in the follow-up"
+
     await runtime.accept_inbound(inbound_2)
 
     async with sqlite_session_factory() as session:
         run_ids = (await session.execute(select(AgentRun.id))).scalars().all()
     assert len(run_ids) == 2, run_ids
-    other = [r for r in run_ids if r != run_1_id]
-    assert len(other) == 1, run_ids
-    run_2_id = other[0]
+    [run_2_id] = [r for r in run_ids if r != run_1_id]
 
-    # Model 2: a real model would answer follow-ups by reading the
-    # message_history it was handed. Inspect received messages for any
-    # ToolReturnPart that carries the token — that is the previous run's
-    # tool output threaded in by `message_history=`.
-    captured_history_seen_token: list[bool] = []
-
-    async def model_2(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        found = False
-        for msg in messages:
-            for part in getattr(msg, "parts", []):
-                if isinstance(part, ToolReturnPart) and token in str(part.content):
-                    found = True
-                    break
-            if found:
-                break
-        captured_history_seen_token.append(found)
-        if found:
-            return ModelResponse(
-                parts=[TextPart(content=f"Earlier you asked me to action {token}.")]
-            )
-        return ModelResponse(parts=[TextPart(content="I have no prior context for that.")])
-
-    with agent.override_model(_scope(), FunctionModel(model_2)):
+    history_inspections: list[bool] = []
+    with agent.override_model(
+        _scope(),
+        _account_recall_followup_model(secret, history_inspections=history_inspections),
+    ):
         outcome_2 = await runtime.execute_run(run_2_id)
     assert isinstance(outcome_2, Completed)
 
     assert len(email_provider.sent) == 2
     second_reply = email_provider.sent[1].body_text
-    # User-visible contract: the follow-up reply explains the prior
-    # tool-backed action by name. This only works if run 2 received run 1's
-    # ModelMessage history.
-    assert token in second_reply, (
-        f"second reply must reference the prior tool-backed action by name; got: {second_reply!r}"
+    assert secret in second_reply, (
+        f"the follow-up reply must surface the prior tool-backed lookup; got: {second_reply!r}"
     )
     assert "no prior context" not in second_reply
+    assert history_inspections == [True], (
+        "the model double must have been called exactly once and seen the prior tool return"
+    )
+
+
+async def test_history_does_not_leak_across_separate_threads_for_same_assistant(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """Product contract: prior-run history is scoped to one email thread.
+
+    A second, unrelated inbound (no In-Reply-To, no References) opens a
+    fresh thread. The agent must answer that without leaking tool output
+    from the previous thread's runs — otherwise a customer's data could
+    surface in an unrelated conversation.
+    """
+    secret = "ACCOUNT-99887"
+
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    await workspace.environment.write_text("notes/account.txt", secret)
+
+    email_provider = InMemoryEmailProvider()
+    agent = AssistantAgent()
+    runtime = await _make_history_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        workspace=workspace,
+        agent=agent,
+    )
+
+    # Thread A: lookup the secret via a tool, persist that history.
+    thread_a_inbound = NormalizedInboundEmail(
+        provider_message_id="prov-thread-a",
+        message_id_header="<thread-a@x>",
+        from_email="mum@example.com",
+        to_emails=["mum@assistants.example.com"],
+        subject="customer record",
+        body_text="please check notes/account.txt",
+        received_at=datetime(2026, 5, 10, 12, 0, tzinfo=UTC),
+    )
+    await runtime.accept_inbound(thread_a_inbound)
+    thread_a_run_id = await _run_id_for(sqlite_session_factory)
+    with agent.override_model(_scope(), _account_lookup_first_run_model(secret)):
+        await runtime.execute_run(thread_a_run_id)
+
+    # Thread B: an unrelated, fresh inbound — no threading headers — opens
+    # a new EmailThread. The agent asks itself the same recall question.
+    thread_b_inbound = NormalizedInboundEmail(
+        provider_message_id="prov-thread-b",
+        message_id_header="<thread-b@x>",
+        from_email="mum@example.com",
+        to_emails=["mum@assistants.example.com"],
+        subject="totally unrelated chat",
+        body_text="hi! quick question — what's my account number on file?",
+        received_at=datetime(2026, 5, 11, 9, 0, tzinfo=UTC),
+    )
+    await runtime.accept_inbound(thread_b_inbound)
+    async with sqlite_session_factory() as session:
+        run_ids = (await session.execute(select(AgentRun.id))).scalars().all()
+    [thread_b_run_id] = [r for r in run_ids if r != thread_a_run_id]
+
+    history_inspections: list[bool] = []
+    with agent.override_model(
+        _scope(),
+        _account_recall_followup_model(secret, history_inspections=history_inspections),
+    ):
+        outcome = await runtime.execute_run(thread_b_run_id)
+    assert isinstance(outcome, Completed)
+
+    thread_b_reply = email_provider.sent[1].body_text
+    assert secret not in thread_b_reply, (
+        "history must not leak across threads: thread B reply contained the secret "
+        f"from thread A's tool output; got: {thread_b_reply!r}"
+    )
+    assert history_inspections == [False], (
+        "the follow-up model double must have been handed no prior tool history for "
+        f"the fresh thread; got inspections: {history_inspections!r}"
+    )
