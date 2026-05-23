@@ -439,6 +439,7 @@ class AssistantAgent:
         output_tokens = usage.output_tokens or 0
         cache_read_tokens = getattr(usage, "cache_read_tokens", 0) or 0
         metered_usage = list(deps.metered_usage)
+        all_messages = result.all_messages()
         return AgentResult(
             body=result.output,
             usage=_add_metered_cost(
@@ -455,10 +456,11 @@ class AssistantAgent:
                 metered_usage,
             ),
             steps=_filter_live_recorded_tool_steps(
-                _apply_tool_costs(_extract_steps(result.all_messages()), metered_usage),
+                _apply_tool_costs(_extract_steps(all_messages), metered_usage),
                 deps,
             ),
             metered_usage=metered_usage,
+            message_history=all_messages,
         )
 
 

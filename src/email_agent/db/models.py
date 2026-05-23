@@ -209,6 +209,10 @@ class AgentRun(Base):
     )
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     user_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSON-mode dump of `ModelMessagesTypeAdapter` for the completed run.
+    # Populated for `completed` and `quiet_exited` runs; null otherwise.
+    # Threaded into the next same-thread run as `Agent.run(message_history=...)`.
+    message_history: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class RunStep(Base):

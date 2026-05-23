@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from pydantic_ai import ToolReturn
+from pydantic_ai.messages import ModelMessage
 
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import PendingAttachment
@@ -148,6 +149,10 @@ class AgentResult:
     usage: RunUsage
     steps: list["RunStepRecord"] = field(default_factory=list)
     metered_usage: list[MeteredUsage] = field(default_factory=list)
+    # `result.all_messages()` from the underlying pydantic-ai run, kept so the
+    # runtime can persist it on `agent_runs.message_history` and later thread
+    # it into the next same-thread run.
+    message_history: list[ModelMessage] = field(default_factory=list)
 
 
 class AgentRunError(Exception):

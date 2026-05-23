@@ -1,11 +1,13 @@
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from pydantic_ai.messages import ModelMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from email_agent.agent.history import serialize_message_history
 from email_agent.db.models import (
     AgentRun,
     EmailMessage,
@@ -34,6 +36,11 @@ class CompletedRun:
     steps: list[RunStepRecord]
     usage: RunUsage
     metered_usage: list[MeteredUsage] | None = None
+    # Raw `result.all_messages()` from the pydantic-ai run. Persisted as JSON
+    # on `agent_runs.message_history` so the next same-thread run can resume
+    # with full tool-call context. Empty when there is no agent run behind the
+    # completion (e.g. budget-limited templated replies).
+    message_history: list[ModelMessage] = field(default_factory=list)
 
 
 class RunRecorder:
@@ -97,6 +104,8 @@ class RunRecorder:
             run.completed_at = datetime.now(UTC)
             run.reply_message_id = outbound.id
             run.error = None
+            if completed.message_history:
+                run.message_history = serialize_message_history(completed.message_history)
             assistant_id = run.assistant_id
             thread_id = run.thread_id
 
@@ -145,6 +154,7 @@ class RunRecorder:
         steps: list[RunStepRecord],
         usage: RunUsage,
         metered_usage: list[MeteredUsage] | None = None,
+        message_history: list[ModelMessage] | None = None,
     ) -> None:
         async with self._session_factory() as session:
             run = await session.get(AgentRun, run_id)
@@ -155,6 +165,8 @@ class RunRecorder:
             run.completed_at = datetime.now(UTC)
             run.reply_message_id = None
             run.error = None
+            if message_history:
+                run.message_history = serialize_message_history(message_history)
 
             for step in steps:
                 session.add(

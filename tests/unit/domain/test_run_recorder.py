@@ -489,6 +489,142 @@ async def test_record_failure_does_not_call_curate_memory_defer(
     assert deferred == []
 
 
+async def test_record_completion_persists_message_history_as_json(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """A successful run's Pydantic AI `result.all_messages()` must land on
+    `agent_runs.message_history` as a JSON payload that round-trips back to
+    live `ModelMessage` instances. The next same-thread run reads this column.
+    """
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        TextPart,
+        ToolCallPart,
+        ToolReturnPart,
+        UserPromptPart,
+    )
+
+    from email_agent.agent.history import deserialize_message_history
+
+    async with sqlite_session_factory() as session:
+        run_id, _ = await _seed_run(session, tmp_path=tmp_path)
+
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="please action ACTION-TOKEN-XYZ")]),
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="read", args={"path": "x.md"}, tool_call_id="c1")]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read",
+                    content="please action ACTION-TOKEN-XYZ",
+                    tool_call_id="c1",
+                )
+            ]
+        ),
+        ModelResponse(parts=[TextPart(content="OK")]),
+    ]
+
+    recorder = RunRecorder(sqlite_session_factory)
+    await recorder.record_completion(
+        CompletedRun(
+            run_id=run_id,
+            scope=_scope(),
+            outbound=_outbound(),
+            sent=SentEmail(provider_message_id="prov-out-1", message_id_header="<run-abc@x>"),
+            steps=[],
+            usage=RunUsage(input_tokens=10, output_tokens=2, cost_usd=Decimal("0.01")),
+            message_history=history,
+        )
+    )
+
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun))).scalar_one()
+        assert run.message_history is not None
+        rehydrated = deserialize_message_history(run.message_history)
+        # The same call/return pair survives the round trip — that is what the
+        # next run will see in its `message_history=`.
+        tool_returns = [
+            p
+            for m in rehydrated
+            for p in getattr(m, "parts", [])
+            if p.__class__.__name__ == "ToolReturnPart"
+        ]
+        assert any("ACTION-TOKEN-XYZ" in str(p.content) for p in tool_returns)
+
+
+async def test_record_completion_leaves_message_history_null_when_empty(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """Budget-limited completions go through `record_completion` with no agent
+    run behind them. There's nothing to thread into a follow-up, so the column
+    must stay NULL rather than storing `[]` and pretending history exists.
+    """
+    async with sqlite_session_factory() as session:
+        run_id, _ = await _seed_run(session, tmp_path=tmp_path)
+
+    recorder = RunRecorder(sqlite_session_factory)
+    await recorder.record_completion(
+        CompletedRun(
+            run_id=run_id,
+            scope=_scope(),
+            outbound=_outbound(),
+            sent=SentEmail(provider_message_id="prov-out-1", message_id_header="<run-abc@x>"),
+            steps=[],
+            usage=RunUsage(input_tokens=0, output_tokens=0, cost_usd=Decimal("0")),
+            message_history=[],
+        )
+    )
+
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun))).scalar_one()
+        assert run.message_history is None
+
+
+async def test_record_quiet_exit_persists_message_history(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    """Quiet-exit runs still produced model + tool messages; persist those so
+    a later same-thread run can still resume against the silent run's context.
+    """
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        TextPart,
+        UserPromptPart,
+    )
+
+    async with sqlite_session_factory() as session:
+        run_id, _ = await _seed_run(session, tmp_path=tmp_path)
+
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="hi")]),
+        ModelResponse(parts=[TextPart(content="QUIETLY_EXIT")]),
+    ]
+
+    recorder = RunRecorder(sqlite_session_factory)
+    await recorder.record_quiet_exit(
+        run_id=run_id,
+        scope=_scope(),
+        steps=[],
+        usage=RunUsage(input_tokens=4, output_tokens=2, cost_usd=Decimal("0.001")),
+        message_history=history,
+    )
+
+    async with sqlite_session_factory() as session:
+        run = (await session.execute(select(AgentRun))).scalar_one()
+        assert run.status == "quiet_exited"
+        assert run.message_history is not None
+        # Crude shape check: list[dict] with a `parts` key in each entry.
+        assert len(run.message_history) == 2
+        assert all("parts" in entry for entry in run.message_history)
+
+
 @pytest.mark.parametrize("missing_run_id", ["does-not-exist"])
 async def test_record_completion_raises_when_run_missing(
     sqlite_session_factory: async_sessionmaker[AsyncSession],

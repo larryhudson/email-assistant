@@ -515,6 +515,7 @@ class AssistantRuntime:
                 steps=agent_result.steps,
                 usage=agent_result.usage,
                 metered_usage=agent_result.metered_usage,
+                message_history=agent_result.message_history,
             )
             await self._record_scheduled_agent_quiet_exit(run_id)
             return QuietExited(run_id=run_id)
@@ -569,6 +570,7 @@ class AssistantRuntime:
                     steps=agent_result.steps,
                     usage=agent_result.usage,
                     metered_usage=agent_result.metered_usage,
+                    message_history=agent_result.message_history,
                 )
             )
             await self._record_scheduled_visible_notification(run_id, scope)
