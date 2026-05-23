@@ -410,7 +410,14 @@ class AssistantAgent:
         with agent.override(model=model):
             yield agent
 
-    async def run(self, scope: AssistantScope, *, prompt: str, deps: AgentDeps) -> AgentResult:
+    async def run(
+        self,
+        scope: AssistantScope,
+        *,
+        prompt: str,
+        deps: AgentDeps,
+        message_history: list[ModelMessage] | None = None,
+    ) -> AgentResult:
         agent = self._agent_for(scope)
         # capture_run_messages retains the request/response log even when
         # agent.run raises — so a run that fails after N tool calls still
@@ -419,7 +426,7 @@ class AssistantAgent:
         # can persist partial usage + steps instead of dropping them.
         with capture_run_messages() as captured:
             try:
-                result = await agent.run(prompt, deps=deps)
+                result = await agent.run(prompt, deps=deps, message_history=message_history)
             except Exception as exc:
                 partial_usage = _summarise_partial_usage(captured, scope)
                 partial_metered = list(deps.metered_usage)

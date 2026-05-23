@@ -15,10 +15,12 @@ if TYPE_CHECKING:
     from email_agent.github.port import GitHubPort
     from email_agent.pdf.port import PdfRenderPort
 
+from pydantic_ai.messages import ModelMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from email_agent.agent.assistant_agent import AssistantAgent
+from email_agent.agent.history import deserialize_message_history
 from email_agent.agent.run_context import RunContextAssembler
 from email_agent.agent.toolset import AgentToolset
 from email_agent.db.models import (
@@ -457,15 +459,31 @@ class AssistantRuntime:
             else contextlib.nullcontext()
         )
 
+        prior_history = await self._load_prior_thread_history(
+            assistant_id=scope.assistant_id,
+            thread_id=thread.id,
+            current_run_id=run_id,
+        )
+
         try:
             with model_override:
                 if self._run_timeout_seconds is not None:
                     agent_result = await asyncio.wait_for(
-                        self._agent.run(scope, prompt=prompt, deps=deps),
+                        self._agent.run(
+                            scope,
+                            prompt=prompt,
+                            deps=deps,
+                            message_history=prior_history,
+                        ),
                         timeout=self._run_timeout_seconds,
                     )
                 else:
-                    agent_result = await self._agent.run(scope, prompt=prompt, deps=deps)
+                    agent_result = await self._agent.run(
+                        scope,
+                        prompt=prompt,
+                        deps=deps,
+                        message_history=prior_history,
+                    )
         except TimeoutError as exc:
             await self._recorder.record_failure(
                 run_id,
@@ -729,6 +747,37 @@ class AssistantRuntime:
                 list(messages),
                 list(attachments),
             )
+
+    async def _load_prior_thread_history(
+        self,
+        *,
+        assistant_id: str,
+        thread_id: str,
+        current_run_id: str,
+    ) -> list[ModelMessage] | None:
+        """Most recent prior `completed`/`quiet_exited` run's Pydantic AI
+        message history for this assistant+thread, deserialized so the next
+        `agent.run` can resume against full tool-call context. Returns None
+        when there is no prior history to thread through.
+        """
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    select(AgentRun.message_history)
+                    .where(
+                        AgentRun.assistant_id == assistant_id,
+                        AgentRun.thread_id == thread_id,
+                        AgentRun.id != current_run_id,
+                        AgentRun.status.in_(("completed", "quiet_exited")),
+                        AgentRun.message_history.is_not(None),
+                    )
+                    .order_by(AgentRun.completed_at.desc(), AgentRun.id.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        if row is None:
+            return None
+        return deserialize_message_history(row)
 
     async def _record_budget_limited(
         self,

@@ -1269,13 +1269,6 @@ async def test_execute_run_notifies_on_failure_after_agent_succeeded(
         assert "smtp explosion" in (run.error or "")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "RED for same-thread Pydantic AI history: runtime does not yet pass "
-        "previous-run ModelMessages into the next agent.run as message_history."
-    ),
-)
 async def test_same_thread_followup_sees_prior_run_tool_history(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,
@@ -1404,14 +1397,11 @@ async def test_same_thread_followup_sees_prior_run_tool_history(
     await runtime.accept_inbound(inbound_2)
 
     async with sqlite_session_factory() as session:
-        run_ids = (
-            (await session.execute(select(AgentRun.id).order_by(AgentRun.started_at, AgentRun.id)))
-            .scalars()
-            .all()
-        )
+        run_ids = (await session.execute(select(AgentRun.id))).scalars().all()
     assert len(run_ids) == 2, run_ids
-    run_2_id = run_ids[1]
-    assert run_2_id != run_1_id
+    other = [r for r in run_ids if r != run_1_id]
+    assert len(other) == 1, run_ids
+    run_2_id = other[0]
 
     # Model 2: a real model would answer follow-ups by reading the
     # message_history it was handed. Inspect received messages for any
