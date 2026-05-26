@@ -656,8 +656,12 @@ def worker(
         if queues:
             worker_kwargs["queues"] = queues
 
-        async with procrastinate_app.open_async():
-            await procrastinate_app.run_worker_async(**worker_kwargs)  # ty: ignore[invalid-argument-type]
+        try:
+            async with procrastinate_app.open_async():
+                await procrastinate_app.run_worker_async(**worker_kwargs)  # ty: ignore[invalid-argument-type]
+        finally:
+            if os.environ.get("EMAIL_AGENT_CANCEL_INTERRUPTED_ON_WORKER_EXIT") == "true":
+                await _cancel_interrupted_dev_jobs_async("worker shutdown")
 
     asyncio.run(_run())
 
@@ -679,6 +683,9 @@ def worker_dev(
     """Run the Procrastinate worker with auto-reload for local development."""
     from watchfiles import Change, run_process
 
+    _cancel_interrupted_dev_jobs("worker-dev startup")
+    os.environ["EMAIL_AGENT_CANCEL_INTERRUPTED_ON_WORKER_EXIT"] = "true"
+
     command_args = ["-m", "email_agent.cli", "worker", "--concurrency", str(concurrency)]
     for queue in queues or []:
         command_args.extend(["--queue", queue])
@@ -690,14 +697,55 @@ def worker_dev(
         suffix = f": {changed}" if changed else ""
         typer.secho(f"reloading worker{suffix}", fg="yellow")
 
-    raise typer.Exit(
-        run_process(
+    try:
+        exit_code = run_process(
             *watch_paths,
             target=shlex.join([sys.executable, *command_args]),
             target_type="command",
             callback=_changed,
         )
+    finally:
+        _cancel_interrupted_dev_jobs("worker-dev shutdown")
+
+    raise typer.Exit(exit_code)
+
+
+@app.command("cancel-interrupted-jobs")
+def cancel_interrupted_jobs() -> None:
+    """Cancel jobs/runs left active after an interrupted worker."""
+    result = _cancel_interrupted_dev_jobs("manual operator cleanup")
+    typer.secho(
+        f"cancelled {result.job_count} job(s); marked {result.run_count} run(s) failed",
+        fg="green",
     )
+
+
+def _cancel_interrupted_dev_jobs(reason: str):
+    return asyncio.run(_cancel_interrupted_dev_jobs_async(reason))
+
+
+async def _cancel_interrupted_dev_jobs_async(reason: str):
+    from email_agent.config import Settings
+    from email_agent.db.session import make_engine, make_session_factory
+    from email_agent.jobs.recovery import cancel_interrupted_jobs
+
+    settings = Settings()  # ty: ignore[missing-argument]
+    engine = make_engine(settings)
+    try:
+        result = await cancel_interrupted_jobs(
+            make_session_factory(engine),
+            reason=f"Interrupted by {reason}.",
+        )
+    finally:
+        await engine.dispose()
+
+    if result.job_count or result.run_count:
+        typer.secho(
+            f"{reason}: cancelled {result.job_count} interrupted job(s), "
+            f"marked {result.run_count} run(s) failed",
+            fg="yellow",
+        )
+    return result
 
 
 if __name__ == "__main__":
