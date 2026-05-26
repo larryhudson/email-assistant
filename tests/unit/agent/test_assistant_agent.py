@@ -12,6 +12,13 @@ from pydantic_ai.models.test import TestModel
 from email_agent.agent.assistant_agent import AssistantAgent
 from email_agent.agent.toolset import AgentToolset
 from email_agent.github.port import GitHubRepository
+from email_agent.google_workspace.port import (
+    GoogleCalendarDeleteResult,
+    GoogleCalendarEventResult,
+    GoogleCalendarEventsResult,
+    GoogleCalendarFreeBusyResult,
+    GoogleCalendarListResult,
+)
 from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.agent import AgentDeps, MeteredUsage
 from email_agent.models.assistant import AssistantScope, AssistantStatus
@@ -152,33 +159,33 @@ class _FakeGitHub:
 
 
 class _FakeGoogleCalendar:
-    async def list_calendars(self, assistant_id: str) -> str:
+    async def list_calendars(self, assistant_id: str) -> GoogleCalendarListResult:
         _ = assistant_id
-        return '{"items":[{"id":"primary"}]}'
+        return GoogleCalendarListResult(items=[{"id": "primary"}])
 
-    async def list_events(self, assistant_id: str, **kwargs) -> str:
+    async def list_events(self, assistant_id: str, **kwargs) -> GoogleCalendarEventsResult:
         _ = assistant_id, kwargs
-        return '{"items":[]}'
+        return GoogleCalendarEventsResult(items=[])
 
-    async def get_event(self, assistant_id: str, **kwargs) -> str:
+    async def get_event(self, assistant_id: str, **kwargs) -> GoogleCalendarEventResult:
         _ = assistant_id, kwargs
-        return '{"id":"event-1"}'
+        return GoogleCalendarEventResult(id="event-1")
 
-    async def check_free_busy(self, assistant_id: str, **kwargs) -> str:
+    async def check_free_busy(self, assistant_id: str, **kwargs) -> GoogleCalendarFreeBusyResult:
         _ = assistant_id, kwargs
-        return '{"calendars":{}}'
+        return GoogleCalendarFreeBusyResult(calendars={})
 
-    async def create_event(self, assistant_id: str, **kwargs) -> str:
+    async def create_event(self, assistant_id: str, **kwargs) -> GoogleCalendarEventResult:
         _ = assistant_id, kwargs
-        return '{"id":"created"}'
+        return GoogleCalendarEventResult(id="created")
 
-    async def update_event(self, assistant_id: str, **kwargs) -> str:
+    async def update_event(self, assistant_id: str, **kwargs) -> GoogleCalendarEventResult:
         _ = assistant_id, kwargs
-        return '{"id":"event-1"}'
+        return GoogleCalendarEventResult(id="event-1")
 
-    async def delete_event(self, assistant_id: str, **kwargs) -> str:
+    async def delete_event(self, assistant_id: str, **kwargs) -> GoogleCalendarDeleteResult:
         _ = assistant_id, kwargs
-        return '{"deleted":true}'
+        return GoogleCalendarDeleteResult(deleted=True, calendar_id="primary", event_id="event-1")
 
 
 async def test_assistant_agent_returns_text_output() -> None:
@@ -818,6 +825,49 @@ async def test_calendar_tools_registered_only_when_enabled() -> None:
     )
 
 
+async def test_calendar_tools_are_available_inside_code_mode_run_code() -> None:
+    agent = AssistantAgent(has_google_calendar=True)
+    deps = _deps(google_calendar=_FakeGoogleCalendar())
+    scope = _scope(tool_allowlist=("calendar_list_calendars",))
+
+    code = "(await calendar_list_calendars())['items'][0]['id']"
+    with agent.override_model(scope, _call_then_echo("run_code", {"code": code})):
+        result = await agent.run(scope, prompt="list calendars", deps=deps)
+
+    assert result.body == "primary"
+    assert result.steps[0].kind == "tool:run_code"
+
+
+async def test_calendar_tools_appear_in_run_code_description_when_code_mode_enabled() -> None:
+    captured: dict[str, list[str]] = {}
+
+    async def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages
+        captured["tool_names"] = [tool.name for tool in info.function_tools]
+        captured["descriptions"] = [tool.description or "" for tool in info.function_tools]
+        return ModelResponse(parts=[TextPart(content="ok")])
+
+    agent = AssistantAgent(has_google_calendar=True)
+    scope = _scope(
+        tool_allowlist=(
+            "calendar_list_calendars",
+            "calendar_list_events",
+            "calendar_create_event",
+        )
+    )
+
+    with agent.override_model(scope, FunctionModel(fn)):
+        await agent.run(scope, prompt="what tools do you have?", deps=_deps())
+
+    assert captured["tool_names"] == ["run_code"]
+    run_code_description = captured["descriptions"][0]
+    assert "calendar_list_calendars" in run_code_description
+    assert "calendar_list_events" in run_code_description
+    assert "calendar_create_event" in run_code_description
+    assert "class GoogleCalendarListResult(TypedDict)" in run_code_description
+    assert "-> GoogleCalendarListResult" in run_code_description
+
+
 async def test_tools_are_registered_from_assistant_allowlist() -> None:
     built = AssistantAgent(has_web_search=True)._agent_for(
         _scope(tool_allowlist=("read", "web_search", "clone_github_repository"))
@@ -850,7 +900,7 @@ async def test_google_calendar_tool_routes_through_toolset_without_code_mode() -
     with agent.override_model(scope, _call_then_echo("calendar_list_calendars", {})):
         result = await agent.run(scope, prompt="list calendars", deps=deps)
 
-    assert '"id":"primary"' in result.body
+    assert "'id': 'primary'" in result.body
 
 
 async def test_tool_hook_records_completed_tool_step_live() -> None:

@@ -154,7 +154,7 @@ async def test_list_calendars_resolves_google_workspace_credential(tmp_path: Pat
 
     result = await adapter.list_calendars("a-1")
 
-    assert result == '{"items":[{"id":"primary"}]}'
+    assert result.items == [{"id": "primary"}]
     assert resolver.calls == [("a-1", GOOGLE_WORKSPACE_CREDENTIAL_KEY)]
 
 
@@ -225,10 +225,13 @@ async def test_create_update_delete_and_freebusy_call_google_service(tmp_path: P
     )
     deleted = await adapter.delete_event("a-1", calendar_id="primary", event_id="event-1")
 
-    assert '"id":"created"' in created
-    assert updated == '{"id":"event-1","location":"Office"}'
-    assert freebusy == '{"calendars":{"primary":{"busy":[]}}}'
-    assert deleted == '{"calendarId":"primary","deleted":true,"eventId":"event-1"}'
+    assert created.id == "created"
+    assert updated.id == "event-1"
+    assert updated.location == "Office"
+    assert freebusy.calendars == {"primary": {"busy": []}}
+    assert deleted.deleted is True
+    assert deleted.calendar_id == "primary"
+    assert deleted.event_id == "event-1"
     assert [name for name, _ in service.calls] == [
         "events.insert",
         "events.patch",

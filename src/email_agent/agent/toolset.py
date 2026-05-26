@@ -14,7 +14,14 @@ from pydantic_ai import BinaryContent, ToolReturn
 
 from email_agent.document.port import DocumentToolsPort
 from email_agent.github.port import GitHubPort
-from email_agent.google_workspace.port import GoogleCalendarPort
+from email_agent.google_workspace.port import (
+    GoogleCalendarDeleteResult,
+    GoogleCalendarEventResult,
+    GoogleCalendarEventsResult,
+    GoogleCalendarFreeBusyResult,
+    GoogleCalendarListResult,
+    GoogleCalendarPort,
+)
 from email_agent.models.agent import MeteredUsage
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import PendingAttachment
@@ -394,7 +401,7 @@ class AgentToolset:
             )
         return f"cloned {repo.full_name} into {destination}"
 
-    async def calendar_list_calendars(self) -> str:
+    async def calendar_list_calendars(self) -> GoogleCalendarListResult | str:
         if self._google_calendar is None:
             return _tool_error("calendar_list_calendars", "Google Calendar is disabled")
         try:
@@ -409,7 +416,7 @@ class AgentToolset:
         time_max: datetime | None = None,
         query: str | None = None,
         max_results: int = 50,
-    ) -> str:
+    ) -> GoogleCalendarEventsResult | str:
         if self._google_calendar is None:
             return _tool_error("calendar_list_events", "Google Calendar is disabled")
         if time_min is None or time_max is None:
@@ -429,7 +436,9 @@ class AgentToolset:
         except Exception as exc:
             return _tool_error("calendar_list_events", str(exc))
 
-    async def calendar_get_event(self, calendar_id: str, event_id: str) -> str:
+    async def calendar_get_event(
+        self, calendar_id: str, event_id: str
+    ) -> GoogleCalendarEventResult | str:
         if self._google_calendar is None:
             return _tool_error("calendar_get_event", "Google Calendar is disabled")
         try:
@@ -446,7 +455,7 @@ class AgentToolset:
         calendar_ids: list[str],
         time_min: datetime,
         time_max: datetime,
-    ) -> str:
+    ) -> GoogleCalendarFreeBusyResult | str:
         if self._google_calendar is None:
             return _tool_error("calendar_check_free_busy", "Google Calendar is disabled")
         try:
@@ -468,7 +477,7 @@ class AgentToolset:
         description: str | None = None,
         location: str | None = None,
         attendees: list[str] | None = None,
-    ) -> str:
+    ) -> GoogleCalendarEventResult | str:
         if self._google_calendar is None:
             return _tool_error("calendar_create_event", "Google Calendar is disabled")
         try:
@@ -495,7 +504,7 @@ class AgentToolset:
         description: str | None = None,
         location: str | None = None,
         attendees: list[str] | None = None,
-    ) -> str:
+    ) -> GoogleCalendarEventResult | str:
         if self._google_calendar is None:
             return _tool_error("calendar_update_event", "Google Calendar is disabled")
         try:
@@ -513,7 +522,9 @@ class AgentToolset:
         except Exception as exc:
             return _tool_error("calendar_update_event", str(exc))
 
-    async def calendar_delete_event(self, calendar_id: str, event_id: str) -> str:
+    async def calendar_delete_event(
+        self, calendar_id: str, event_id: str
+    ) -> GoogleCalendarDeleteResult | str:
         if self._google_calendar is None:
             return _tool_error("calendar_delete_event", "Google Calendar is disabled")
         try:

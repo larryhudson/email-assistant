@@ -5,6 +5,13 @@ from pydantic_ai import BinaryContent, ToolReturn
 
 from email_agent.agent.toolset import AgentToolset
 from email_agent.github.port import GitHubRepository
+from email_agent.google_workspace.port import (
+    GoogleCalendarDeleteResult,
+    GoogleCalendarEventResult,
+    GoogleCalendarEventsResult,
+    GoogleCalendarFreeBusyResult,
+    GoogleCalendarListResult,
+)
 from email_agent.memory.inmemory import InMemoryMemoryAdapter
 from email_agent.models.agent import MeteredUsage
 from email_agent.models.sandbox import PendingAttachment
@@ -127,33 +134,37 @@ class _FakeGoogleCalendar:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
 
-    async def list_calendars(self, assistant_id: str) -> str:
+    async def list_calendars(self, assistant_id: str) -> GoogleCalendarListResult:
         self.calls.append(("list_calendars", {"assistant_id": assistant_id}))
-        return '{"items":[{"id":"primary"}]}'
+        return GoogleCalendarListResult(items=[{"id": "primary"}])
 
-    async def list_events(self, assistant_id: str, **kwargs) -> str:
+    async def list_events(self, assistant_id: str, **kwargs) -> GoogleCalendarEventsResult:
         self.calls.append(("list_events", {"assistant_id": assistant_id, **kwargs}))
-        return '{"items":[]}'
+        return GoogleCalendarEventsResult(items=[])
 
-    async def get_event(self, assistant_id: str, **kwargs) -> str:
+    async def get_event(self, assistant_id: str, **kwargs) -> GoogleCalendarEventResult:
         self.calls.append(("get_event", {"assistant_id": assistant_id, **kwargs}))
-        return '{"id":"event-1"}'
+        return GoogleCalendarEventResult(id="event-1")
 
-    async def check_free_busy(self, assistant_id: str, **kwargs) -> str:
+    async def check_free_busy(self, assistant_id: str, **kwargs) -> GoogleCalendarFreeBusyResult:
         self.calls.append(("check_free_busy", {"assistant_id": assistant_id, **kwargs}))
-        return '{"calendars":{}}'
+        return GoogleCalendarFreeBusyResult(calendars={})
 
-    async def create_event(self, assistant_id: str, **kwargs) -> str:
+    async def create_event(self, assistant_id: str, **kwargs) -> GoogleCalendarEventResult:
         self.calls.append(("create_event", {"assistant_id": assistant_id, **kwargs}))
-        return '{"id":"created"}'
+        return GoogleCalendarEventResult(id="created")
 
-    async def update_event(self, assistant_id: str, **kwargs) -> str:
+    async def update_event(self, assistant_id: str, **kwargs) -> GoogleCalendarEventResult:
         self.calls.append(("update_event", {"assistant_id": assistant_id, **kwargs}))
-        return '{"id":"event-1"}'
+        return GoogleCalendarEventResult(id="event-1")
 
-    async def delete_event(self, assistant_id: str, **kwargs) -> str:
+    async def delete_event(self, assistant_id: str, **kwargs) -> GoogleCalendarDeleteResult:
         self.calls.append(("delete_event", {"assistant_id": assistant_id, **kwargs}))
-        return '{"deleted":true}'
+        return GoogleCalendarDeleteResult(
+            deleted=True,
+            calendar_id=kwargs["calendar_id"],
+            event_id=kwargs["event_id"],
+        )
 
 
 async def test_read_returns_file_contents() -> None:
@@ -421,9 +432,12 @@ async def test_calendar_tools_delegate_to_host_google_calendar() -> None:
     events = await toolset.calendar_list_events("primary", start, end)
     created = await toolset.calendar_create_event("primary", "Meet", start, end)
 
-    assert listed == '{"items":[{"id":"primary"}]}'
-    assert events == '{"items":[]}'
-    assert created == '{"id":"created"}'
+    assert not isinstance(listed, str)
+    assert not isinstance(events, str)
+    assert not isinstance(created, str)
+    assert listed.items == [{"id": "primary"}]
+    assert events.items == []
+    assert created.id == "created"
     assert [name for name, _ in calendar.calls] == [
         "list_calendars",
         "list_events",

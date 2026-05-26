@@ -21,6 +21,13 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai_harness import CodeMode
 
 from email_agent.agent.pricing import estimate_cost_usd
+from email_agent.google_workspace.port import (
+    GoogleCalendarDeleteResult,
+    GoogleCalendarEventResult,
+    GoogleCalendarEventsResult,
+    GoogleCalendarFreeBusyResult,
+    GoogleCalendarListResult,
+)
 from email_agent.models.agent import (
     AgentDeps,
     AgentResult,
@@ -39,6 +46,12 @@ _NATIVE_WHEN_CODE_MODE_TOOLS = frozenset({"preview_pdf", "read_image"})
 
 def _use_tool_in_code_mode(_ctx: RunContext[AgentDeps], tool_def: ToolDefinition) -> bool:
     return tool_def.name not in _NATIVE_WHEN_CODE_MODE_TOOLS
+
+
+def _calendar_result[T](value: T | str) -> T:
+    if isinstance(value, str):
+        raise RuntimeError(value)
+    return value
 
 
 class AssistantAgent:
@@ -327,9 +340,11 @@ class AssistantAgent:
         if self._tool_enabled(scope, "calendar_list_calendars"):
 
             @agent.tool
-            async def calendar_list_calendars(ctx: RunContext[AgentDeps]) -> str:
+            async def calendar_list_calendars(
+                ctx: RunContext[AgentDeps],
+            ) -> GoogleCalendarListResult:
                 """List Google calendars available to this assistant's linked account."""
-                return await ctx.deps.toolset.calendar_list_calendars()
+                return _calendar_result(await ctx.deps.toolset.calendar_list_calendars())
 
         if self._tool_enabled(scope, "calendar_list_events"):
 
@@ -341,14 +356,16 @@ class AssistantAgent:
                 time_max: datetime | None = None,
                 query: str | None = None,
                 max_results: int = 50,
-            ) -> str:
+            ) -> GoogleCalendarEventsResult:
                 """List Google Calendar events between timezone-aware datetimes."""
-                return await ctx.deps.toolset.calendar_list_events(
-                    calendar_id,
-                    time_min,
-                    time_max,
-                    query,
-                    max_results,
+                return _calendar_result(
+                    await ctx.deps.toolset.calendar_list_events(
+                        calendar_id,
+                        time_min,
+                        time_max,
+                        query,
+                        max_results,
+                    ),
                 )
 
         if self._tool_enabled(scope, "calendar_get_event"):
@@ -358,9 +375,11 @@ class AssistantAgent:
                 ctx: RunContext[AgentDeps],
                 calendar_id: str,
                 event_id: str,
-            ) -> str:
+            ) -> GoogleCalendarEventResult:
                 """Get one Google Calendar event by calendar id and event id."""
-                return await ctx.deps.toolset.calendar_get_event(calendar_id, event_id)
+                return _calendar_result(
+                    await ctx.deps.toolset.calendar_get_event(calendar_id, event_id)
+                )
 
         if self._tool_enabled(scope, "calendar_check_free_busy"):
 
@@ -370,12 +389,14 @@ class AssistantAgent:
                 calendar_ids: list[str],
                 time_min: datetime,
                 time_max: datetime,
-            ) -> str:
+            ) -> GoogleCalendarFreeBusyResult:
                 """Check busy blocks for one or more calendars between timezone-aware datetimes."""
-                return await ctx.deps.toolset.calendar_check_free_busy(
-                    calendar_ids,
-                    time_min,
-                    time_max,
+                return _calendar_result(
+                    await ctx.deps.toolset.calendar_check_free_busy(
+                        calendar_ids,
+                        time_min,
+                        time_max,
+                    ),
                 )
 
         if self._tool_enabled(scope, "calendar_create_event"):
@@ -390,16 +411,18 @@ class AssistantAgent:
                 description: str | None = None,
                 location: str | None = None,
                 attendees: list[str] | None = None,
-            ) -> str:
+            ) -> GoogleCalendarEventResult:
                 """Create a Google Calendar event using explicit timezone-aware start/end datetimes."""
-                return await ctx.deps.toolset.calendar_create_event(
-                    calendar_id,
-                    summary,
-                    start,
-                    end,
-                    description,
-                    location,
-                    attendees,
+                return _calendar_result(
+                    await ctx.deps.toolset.calendar_create_event(
+                        calendar_id,
+                        summary,
+                        start,
+                        end,
+                        description,
+                        location,
+                        attendees,
+                    ),
                 )
 
         if self._tool_enabled(scope, "calendar_update_event"):
@@ -415,17 +438,19 @@ class AssistantAgent:
                 description: str | None = None,
                 location: str | None = None,
                 attendees: list[str] | None = None,
-            ) -> str:
+            ) -> GoogleCalendarEventResult:
                 """Patch fields on a Google Calendar event."""
-                return await ctx.deps.toolset.calendar_update_event(
-                    calendar_id,
-                    event_id,
-                    summary,
-                    start,
-                    end,
-                    description,
-                    location,
-                    attendees,
+                return _calendar_result(
+                    await ctx.deps.toolset.calendar_update_event(
+                        calendar_id,
+                        event_id,
+                        summary,
+                        start,
+                        end,
+                        description,
+                        location,
+                        attendees,
+                    ),
                 )
 
         if self._tool_enabled(scope, "calendar_delete_event"):
@@ -435,9 +460,11 @@ class AssistantAgent:
                 ctx: RunContext[AgentDeps],
                 calendar_id: str,
                 event_id: str,
-            ) -> str:
+            ) -> GoogleCalendarDeleteResult:
                 """Delete one Google Calendar event by calendar id and event id."""
-                return await ctx.deps.toolset.calendar_delete_event(calendar_id, event_id)
+                return _calendar_result(
+                    await ctx.deps.toolset.calendar_delete_event(calendar_id, event_id)
+                )
 
         if self._tool_enabled(scope, "bash"):
 

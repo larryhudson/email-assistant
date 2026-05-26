@@ -7,6 +7,13 @@ from typing import Protocol
 from pydantic_ai import ToolReturn
 from pydantic_ai.messages import ModelMessage
 
+from email_agent.google_workspace.port import (
+    GoogleCalendarDeleteResult,
+    GoogleCalendarEventResult,
+    GoogleCalendarEventsResult,
+    GoogleCalendarFreeBusyResult,
+    GoogleCalendarListResult,
+)
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import PendingAttachment
 from email_agent.models.scheduled import ScheduledTask
@@ -64,7 +71,7 @@ class _ToolsetLike(Protocol):
         self, repository: str, destination_path: str | None = None
     ) -> str: ...
 
-    async def calendar_list_calendars(self) -> str: ...
+    async def calendar_list_calendars(self) -> GoogleCalendarListResult | str: ...
 
     async def calendar_list_events(
         self,
@@ -73,16 +80,18 @@ class _ToolsetLike(Protocol):
         time_max: datetime | None = None,
         query: str | None = None,
         max_results: int = 50,
-    ) -> str: ...
+    ) -> GoogleCalendarEventsResult | str: ...
 
-    async def calendar_get_event(self, calendar_id: str, event_id: str) -> str: ...
+    async def calendar_get_event(
+        self, calendar_id: str, event_id: str
+    ) -> GoogleCalendarEventResult | str: ...
 
     async def calendar_check_free_busy(
         self,
         calendar_ids: list[str],
         time_min: datetime,
         time_max: datetime,
-    ) -> str: ...
+    ) -> GoogleCalendarFreeBusyResult | str: ...
 
     async def calendar_create_event(
         self,
@@ -93,7 +102,7 @@ class _ToolsetLike(Protocol):
         description: str | None = None,
         location: str | None = None,
         attendees: list[str] | None = None,
-    ) -> str: ...
+    ) -> GoogleCalendarEventResult | str: ...
 
     async def calendar_update_event(
         self,
@@ -105,9 +114,11 @@ class _ToolsetLike(Protocol):
         description: str | None = None,
         location: str | None = None,
         attendees: list[str] | None = None,
-    ) -> str: ...
+    ) -> GoogleCalendarEventResult | str: ...
 
-    async def calendar_delete_event(self, calendar_id: str, event_id: str) -> str: ...
+    async def calendar_delete_event(
+        self, calendar_id: str, event_id: str
+    ) -> GoogleCalendarDeleteResult | str: ...
 
     async def list_scheduled_tasks(self) -> list[ScheduledTask]: ...
 

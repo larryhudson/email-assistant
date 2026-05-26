@@ -1,5 +1,7 @@
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
+
+from pydantic import BaseModel, ConfigDict, Field
 
 GOOGLE_WORKSPACE_CREDENTIAL_KEY = "google_workspace"
 GOOGLE_WORKSPACE_USER_CREDENTIAL_KIND = "google_authorized_user_file"
@@ -14,8 +16,49 @@ class GoogleCalendarCredentialError(GoogleCalendarError):
     """Missing, invalid, or unusable Google Workspace credential."""
 
 
+class GoogleCalendarListResult(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class GoogleCalendarEventsResult(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class GoogleCalendarEventResult(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    id: str | None = None
+    summary: str | None = None
+    description: str | None = None
+    location: str | None = None
+    status: str | None = None
+    html_link: str | None = Field(default=None, alias="htmlLink")
+    start: dict[str, Any] | None = None
+    end: dict[str, Any] | None = None
+    attendees: list[dict[str, Any]] | None = None
+
+
+class GoogleCalendarFreeBusyResult(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    calendars: dict[str, Any] = Field(default_factory=dict)
+    groups: dict[str, Any] | None = None
+
+
+class GoogleCalendarDeleteResult(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    deleted: bool
+    calendar_id: str
+    event_id: str
+
+
 class GoogleCalendarPort(Protocol):
-    async def list_calendars(self, assistant_id: str) -> str: ...
+    async def list_calendars(self, assistant_id: str) -> GoogleCalendarListResult: ...
 
     async def list_events(
         self,
@@ -26,7 +69,7 @@ class GoogleCalendarPort(Protocol):
         time_max: datetime,
         query: str | None = None,
         max_results: int = 50,
-    ) -> str: ...
+    ) -> GoogleCalendarEventsResult: ...
 
     async def get_event(
         self,
@@ -34,7 +77,7 @@ class GoogleCalendarPort(Protocol):
         *,
         calendar_id: str,
         event_id: str,
-    ) -> str: ...
+    ) -> GoogleCalendarEventResult: ...
 
     async def check_free_busy(
         self,
@@ -43,7 +86,7 @@ class GoogleCalendarPort(Protocol):
         calendar_ids: list[str],
         time_min: datetime,
         time_max: datetime,
-    ) -> str: ...
+    ) -> GoogleCalendarFreeBusyResult: ...
 
     async def create_event(
         self,
@@ -56,7 +99,7 @@ class GoogleCalendarPort(Protocol):
         description: str | None = None,
         location: str | None = None,
         attendees: list[str] | None = None,
-    ) -> str: ...
+    ) -> GoogleCalendarEventResult: ...
 
     async def update_event(
         self,
@@ -70,7 +113,7 @@ class GoogleCalendarPort(Protocol):
         description: str | None = None,
         location: str | None = None,
         attendees: list[str] | None = None,
-    ) -> str: ...
+    ) -> GoogleCalendarEventResult: ...
 
     async def delete_event(
         self,
@@ -78,7 +121,7 @@ class GoogleCalendarPort(Protocol):
         *,
         calendar_id: str,
         event_id: str,
-    ) -> str: ...
+    ) -> GoogleCalendarDeleteResult: ...
 
 
 __all__ = [
@@ -86,6 +129,11 @@ __all__ = [
     "GOOGLE_WORKSPACE_CREDENTIAL_KEY",
     "GOOGLE_WORKSPACE_USER_CREDENTIAL_KIND",
     "GoogleCalendarCredentialError",
+    "GoogleCalendarDeleteResult",
     "GoogleCalendarError",
+    "GoogleCalendarEventResult",
+    "GoogleCalendarEventsResult",
+    "GoogleCalendarFreeBusyResult",
+    "GoogleCalendarListResult",
     "GoogleCalendarPort",
 ]

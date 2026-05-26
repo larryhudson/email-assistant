@@ -1,5 +1,4 @@
 import asyncio
-import json
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -11,7 +10,12 @@ from email_agent.google_workspace.port import (
     GOOGLE_WORKSPACE_CREDENTIAL_KEY,
     GOOGLE_WORKSPACE_USER_CREDENTIAL_KIND,
     GoogleCalendarCredentialError,
+    GoogleCalendarDeleteResult,
     GoogleCalendarError,
+    GoogleCalendarEventResult,
+    GoogleCalendarEventsResult,
+    GoogleCalendarFreeBusyResult,
+    GoogleCalendarListResult,
 )
 from email_agent.tool_credentials.port import ActiveToolCredential, ToolCredentialResolver
 
@@ -38,10 +42,10 @@ class GoogleWorkspaceCalendarAdapter:
         self._request_factory = request_factory or _default_request
         self._service_builder = service_builder or _default_calendar_service
 
-    async def list_calendars(self, assistant_id: str) -> str:
+    async def list_calendars(self, assistant_id: str) -> GoogleCalendarListResult:
         service = await self._service_for(assistant_id)
         result = await asyncio.to_thread(service.calendarList().list().execute)
-        return _compact_json(result)
+        return GoogleCalendarListResult.model_validate(result)
 
     async def list_events(
         self,
@@ -52,7 +56,7 @@ class GoogleWorkspaceCalendarAdapter:
         time_max: datetime,
         query: str | None = None,
         max_results: int = 50,
-    ) -> str:
+    ) -> GoogleCalendarEventsResult:
         _assert_aware("time_min", time_min)
         _assert_aware("time_max", time_max)
         service = await self._service_for(assistant_id)
@@ -67,7 +71,7 @@ class GoogleWorkspaceCalendarAdapter:
         if query:
             params["q"] = query
         result = await asyncio.to_thread(service.events().list(**params).execute)
-        return _compact_json(result)
+        return GoogleCalendarEventsResult.model_validate(result)
 
     async def get_event(
         self,
@@ -75,12 +79,12 @@ class GoogleWorkspaceCalendarAdapter:
         *,
         calendar_id: str,
         event_id: str,
-    ) -> str:
+    ) -> GoogleCalendarEventResult:
         service = await self._service_for(assistant_id)
         result = await asyncio.to_thread(
             service.events().get(calendarId=calendar_id, eventId=event_id).execute
         )
-        return _compact_json(result)
+        return GoogleCalendarEventResult.model_validate(result)
 
     async def check_free_busy(
         self,
@@ -89,7 +93,7 @@ class GoogleWorkspaceCalendarAdapter:
         calendar_ids: list[str],
         time_min: datetime,
         time_max: datetime,
-    ) -> str:
+    ) -> GoogleCalendarFreeBusyResult:
         _assert_aware("time_min", time_min)
         _assert_aware("time_max", time_max)
         service = await self._service_for(assistant_id)
@@ -99,7 +103,7 @@ class GoogleWorkspaceCalendarAdapter:
             "items": [{"id": calendar_id} for calendar_id in calendar_ids],
         }
         result = await asyncio.to_thread(service.freebusy().query(body=body).execute)
-        return _compact_json(result)
+        return GoogleCalendarFreeBusyResult.model_validate(result)
 
     async def create_event(
         self,
@@ -112,7 +116,7 @@ class GoogleWorkspaceCalendarAdapter:
         description: str | None = None,
         location: str | None = None,
         attendees: list[str] | None = None,
-    ) -> str:
+    ) -> GoogleCalendarEventResult:
         _assert_aware("start", start)
         _assert_aware("end", end)
         service = await self._service_for(assistant_id)
@@ -127,7 +131,7 @@ class GoogleWorkspaceCalendarAdapter:
         result = await asyncio.to_thread(
             service.events().insert(calendarId=calendar_id, body=body).execute
         )
-        return _compact_json(result)
+        return GoogleCalendarEventResult.model_validate(result)
 
     async def update_event(
         self,
@@ -141,7 +145,7 @@ class GoogleWorkspaceCalendarAdapter:
         description: str | None = None,
         location: str | None = None,
         attendees: list[str] | None = None,
-    ) -> str:
+    ) -> GoogleCalendarEventResult:
         if start is not None:
             _assert_aware("start", start)
         if end is not None:
@@ -167,7 +171,7 @@ class GoogleWorkspaceCalendarAdapter:
         result = await asyncio.to_thread(
             service.events().patch(calendarId=calendar_id, eventId=event_id, body=body).execute
         )
-        return _compact_json(result)
+        return GoogleCalendarEventResult.model_validate(result)
 
     async def delete_event(
         self,
@@ -175,12 +179,16 @@ class GoogleWorkspaceCalendarAdapter:
         *,
         calendar_id: str,
         event_id: str,
-    ) -> str:
+    ) -> GoogleCalendarDeleteResult:
         service = await self._service_for(assistant_id)
         await asyncio.to_thread(
             service.events().delete(calendarId=calendar_id, eventId=event_id).execute
         )
-        return _compact_json({"deleted": True, "calendarId": calendar_id, "eventId": event_id})
+        return GoogleCalendarDeleteResult(
+            deleted=True,
+            calendar_id=calendar_id,
+            event_id=event_id,
+        )
 
     async def _service_for(self, assistant_id: str) -> Any:
         credential = await self._resolve_credential(assistant_id)
@@ -258,10 +266,6 @@ def _event_body(
 def _assert_aware(name: str, value: datetime) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise GoogleCalendarError(f"{name} must be timezone-aware")
-
-
-def _compact_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def _redact(message: str, path: Path | None = None) -> str:
