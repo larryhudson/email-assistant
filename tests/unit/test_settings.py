@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from pydantic import SecretStr, ValidationError
 
@@ -33,6 +35,8 @@ def test_settings_loads_required_fields(monkeypatch):
     assert s.prince_path == "prince"
     assert s.pdf_preview_max_dpi == 220
     assert s.document_tools_enabled is False
+    assert s.google_workspace_enabled is False
+    assert s.google_workspace_credentials_root == Path("data/tool_credentials")
 
 
 def test_settings_accepts_bashkit_sandbox_provider(monkeypatch):

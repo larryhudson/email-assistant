@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, cast
 
@@ -60,14 +61,16 @@ class AssistantAgent:
         has_memory: bool = True,
         has_web_search: bool = False,
         has_document_tools: bool = False,
+        has_google_calendar: bool = False,
         use_code_mode: bool = True,
     ) -> None:
         self._has_memory = has_memory
         self._has_web_search = has_web_search
         self._has_document_tools = has_document_tools
+        self._has_google_calendar = has_google_calendar
         self._use_code_mode = use_code_mode
         self._agents: dict[
-            tuple[str, tuple[str, ...], bool, bool, bool, bool], Agent[AgentDeps, str]
+            tuple[str, tuple[str, ...], bool, bool, bool, bool, bool], Agent[AgentDeps, str]
         ] = {}
 
     def _agent_for(self, scope: AssistantScope) -> Agent[AgentDeps, str]:
@@ -77,6 +80,7 @@ class AssistantAgent:
             self._has_memory,
             self._has_web_search,
             self._has_document_tools,
+            self._has_google_calendar,
             self._use_code_mode,
         )
         cached = self._agents.get(key)
@@ -320,6 +324,121 @@ class AssistantAgent:
                 """Clone one repository owned by the configured GitHub username."""
                 return await ctx.deps.toolset.clone_github_repository(repository, destination_path)
 
+        if self._tool_enabled(scope, "calendar_list_calendars"):
+
+            @agent.tool
+            async def calendar_list_calendars(ctx: RunContext[AgentDeps]) -> str:
+                """List Google calendars available to this assistant's linked account."""
+                return await ctx.deps.toolset.calendar_list_calendars()
+
+        if self._tool_enabled(scope, "calendar_list_events"):
+
+            @agent.tool
+            async def calendar_list_events(
+                ctx: RunContext[AgentDeps],
+                calendar_id: str = "primary",
+                time_min: datetime | None = None,
+                time_max: datetime | None = None,
+                query: str | None = None,
+                max_results: int = 50,
+            ) -> str:
+                """List Google Calendar events between timezone-aware datetimes."""
+                return await ctx.deps.toolset.calendar_list_events(
+                    calendar_id,
+                    time_min,
+                    time_max,
+                    query,
+                    max_results,
+                )
+
+        if self._tool_enabled(scope, "calendar_get_event"):
+
+            @agent.tool
+            async def calendar_get_event(
+                ctx: RunContext[AgentDeps],
+                calendar_id: str,
+                event_id: str,
+            ) -> str:
+                """Get one Google Calendar event by calendar id and event id."""
+                return await ctx.deps.toolset.calendar_get_event(calendar_id, event_id)
+
+        if self._tool_enabled(scope, "calendar_check_free_busy"):
+
+            @agent.tool
+            async def calendar_check_free_busy(
+                ctx: RunContext[AgentDeps],
+                calendar_ids: list[str],
+                time_min: datetime,
+                time_max: datetime,
+            ) -> str:
+                """Check busy blocks for one or more calendars between timezone-aware datetimes."""
+                return await ctx.deps.toolset.calendar_check_free_busy(
+                    calendar_ids,
+                    time_min,
+                    time_max,
+                )
+
+        if self._tool_enabled(scope, "calendar_create_event"):
+
+            @agent.tool
+            async def calendar_create_event(
+                ctx: RunContext[AgentDeps],
+                calendar_id: str,
+                summary: str,
+                start: datetime,
+                end: datetime,
+                description: str | None = None,
+                location: str | None = None,
+                attendees: list[str] | None = None,
+            ) -> str:
+                """Create a Google Calendar event using explicit timezone-aware start/end datetimes."""
+                return await ctx.deps.toolset.calendar_create_event(
+                    calendar_id,
+                    summary,
+                    start,
+                    end,
+                    description,
+                    location,
+                    attendees,
+                )
+
+        if self._tool_enabled(scope, "calendar_update_event"):
+
+            @agent.tool
+            async def calendar_update_event(
+                ctx: RunContext[AgentDeps],
+                calendar_id: str,
+                event_id: str,
+                summary: str | None = None,
+                start: datetime | None = None,
+                end: datetime | None = None,
+                description: str | None = None,
+                location: str | None = None,
+                attendees: list[str] | None = None,
+            ) -> str:
+                """Patch fields on a Google Calendar event."""
+                return await ctx.deps.toolset.calendar_update_event(
+                    calendar_id,
+                    event_id,
+                    summary,
+                    start,
+                    end,
+                    description,
+                    location,
+                    attendees,
+                )
+
+        if self._tool_enabled(scope, "calendar_delete_event"):
+
+            @agent.tool
+            async def calendar_delete_event(
+                ctx: RunContext[AgentDeps],
+                calendar_id: str,
+                event_id: str,
+            ) -> str:
+                """Delete one Google Calendar event by calendar id and event id."""
+                return await ctx.deps.toolset.calendar_delete_event(calendar_id, event_id)
+
         if self._tool_enabled(scope, "bash"):
 
             @agent.tool
@@ -396,6 +515,8 @@ class AssistantAgent:
             return self._has_web_search
         if tool in {"pandoc", "soffice", "python_docx"}:
             return self._has_document_tools
+        if tool.startswith("calendar_"):
+            return self._has_google_calendar
         return True
 
     @contextmanager

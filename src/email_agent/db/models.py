@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -327,6 +328,56 @@ class ScheduledTaskFireRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ToolCredentialRow(Base):
+    """Per-assistant host-side credential for a named tool integration.
+
+    Generic across providers: `tool_credential_key` selects the integration
+    (e.g. ``google_workspace``, ``github``), `credential_kind` selects the
+    shape of secret material (e.g. ``google_authorized_user_file``,
+    ``api_token``), and `secret_ref` is an opaque reference resolved at the
+    adapter boundary — never the secret itself.
+
+    The Python attribute is named ``extra_metadata`` because SQLAlchemy's
+    ``DeclarativeBase`` reserves ``metadata`` on the class. The underlying
+    DB column is still named ``metadata`` for clarity in the schema.
+
+    MVP rule: at most one row with ``status='active'`` per
+    ``(assistant_id, tool_credential_key)``. We don't enforce this with a
+    partial unique index (SQLite/Postgres compatibility), so the resolver
+    asserts the invariant and tests cover the multi-active case.
+    """
+
+    __tablename__ = "tool_credentials"
+
+    id: Mapped[str] = _str_pk()
+    assistant_id: Mapped[str] = mapped_column(ForeignKey("assistants.id"), nullable=False)
+    tool_credential_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    account_identifier: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    credential_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    secret_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    extra_metadata: Mapped[dict] = mapped_column(
+        "metadata", JSON, default=dict, server_default="{}"
+    )
+    status: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
+    last_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_tool_credentials_assistant_id_tool_credential_key",
+            "assistant_id",
+            "tool_credential_key",
+        ),
+    )
+
+
 class Budget(Base):
     """Monthly spend cap for one assistant. DB-only; surfaced in `AssistantScope`."""
 
@@ -355,5 +406,6 @@ __all__ = [
     "RunStep",
     "ScheduledTaskFireRow",
     "ScheduledTaskRow",
+    "ToolCredentialRow",
     "UsageLedger",
 ]

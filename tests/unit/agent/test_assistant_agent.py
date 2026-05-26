@@ -57,6 +57,7 @@ def _deps(
     pdf_renderer: object | None = None,
     document_tools: object | None = None,
     github: object | None = None,
+    google_calendar: object | None = None,
 ) -> AgentDeps:
     actual_env = env or InMemoryEnvironment()
     actual_memory = memory or InMemoryMemoryAdapter()
@@ -79,6 +80,7 @@ def _deps(
             pdf_renderer=pdf_renderer,  # ty: ignore[invalid-argument-type]
             document_tools=document_tools,  # ty: ignore[invalid-argument-type]
             github=github,  # ty: ignore[invalid-argument-type]
+            google_calendar=google_calendar,  # ty: ignore[invalid-argument-type]
         ),
         pending_attachments=actual_pending,
         metered_usage=actual_metered,
@@ -147,6 +149,36 @@ class _FakeGitHub:
 
     async def get_owned_repository(self, name: str):
         return next((repo for repo in self.repos if repo.name == name), None)
+
+
+class _FakeGoogleCalendar:
+    async def list_calendars(self, assistant_id: str) -> str:
+        _ = assistant_id
+        return '{"items":[{"id":"primary"}]}'
+
+    async def list_events(self, assistant_id: str, **kwargs) -> str:
+        _ = assistant_id, kwargs
+        return '{"items":[]}'
+
+    async def get_event(self, assistant_id: str, **kwargs) -> str:
+        _ = assistant_id, kwargs
+        return '{"id":"event-1"}'
+
+    async def check_free_busy(self, assistant_id: str, **kwargs) -> str:
+        _ = assistant_id, kwargs
+        return '{"calendars":{}}'
+
+    async def create_event(self, assistant_id: str, **kwargs) -> str:
+        _ = assistant_id, kwargs
+        return '{"id":"created"}'
+
+    async def update_event(self, assistant_id: str, **kwargs) -> str:
+        _ = assistant_id, kwargs
+        return '{"id":"event-1"}'
+
+    async def delete_event(self, assistant_id: str, **kwargs) -> str:
+        _ = assistant_id, kwargs
+        return '{"deleted":true}'
 
 
 async def test_assistant_agent_returns_text_output() -> None:
@@ -771,6 +803,21 @@ async def test_web_search_tool_registered_only_when_enabled() -> None:
     )
 
 
+async def test_calendar_tools_registered_only_when_enabled() -> None:
+    assert (
+        "calendar_list_calendars"
+        not in AssistantAgent()
+        ._agent_for(_scope(tool_allowlist=("calendar_list_calendars",)))
+        ._function_toolset.tools
+    )
+    assert (
+        "calendar_list_calendars"
+        in AssistantAgent(has_google_calendar=True)
+        ._agent_for(_scope(tool_allowlist=("calendar_list_calendars",)))
+        ._function_toolset.tools
+    )
+
+
 async def test_tools_are_registered_from_assistant_allowlist() -> None:
     built = AssistantAgent(has_web_search=True)._agent_for(
         _scope(tool_allowlist=("read", "web_search", "clone_github_repository"))
@@ -793,6 +840,17 @@ async def test_github_repository_tools_route_through_toolset_without_code_mode()
 
     assert "email-assistant" in result.body
     assert "Email agent" in result.body
+
+
+async def test_google_calendar_tool_routes_through_toolset_without_code_mode() -> None:
+    agent = AssistantAgent(has_google_calendar=True, use_code_mode=False)
+    deps = _deps(google_calendar=_FakeGoogleCalendar())
+    scope = _scope(tool_allowlist=("calendar_list_calendars",))
+
+    with agent.override_model(scope, _call_then_echo("calendar_list_calendars", {})):
+        result = await agent.run(scope, prompt="list calendars", deps=deps)
+
+    assert '"id":"primary"' in result.body
 
 
 async def test_tool_hook_records_completed_tool_step_live() -> None:

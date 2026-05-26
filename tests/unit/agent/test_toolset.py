@@ -25,6 +25,7 @@ def _toolset(
     pdf_renderer: object | None = None,
     document_tools: object | None = None,
     github: object | None = None,
+    google_calendar: object | None = None,
     github_clone_runner=None,
 ) -> AgentToolset:
     return AgentToolset(
@@ -39,6 +40,7 @@ def _toolset(
         pdf_renderer=pdf_renderer,  # ty: ignore[invalid-argument-type]
         document_tools=document_tools,  # ty: ignore[invalid-argument-type]
         github=github,  # ty: ignore[invalid-argument-type]
+        google_calendar=google_calendar,  # ty: ignore[invalid-argument-type]
         github_clone_runner=github_clone_runner,
     )
 
@@ -119,6 +121,39 @@ class _FakeGitHub:
 
     async def get_owned_repository(self, name: str):
         return next((repo for repo in self.repos if repo.name == name), None)
+
+
+class _FakeGoogleCalendar:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def list_calendars(self, assistant_id: str) -> str:
+        self.calls.append(("list_calendars", {"assistant_id": assistant_id}))
+        return '{"items":[{"id":"primary"}]}'
+
+    async def list_events(self, assistant_id: str, **kwargs) -> str:
+        self.calls.append(("list_events", {"assistant_id": assistant_id, **kwargs}))
+        return '{"items":[]}'
+
+    async def get_event(self, assistant_id: str, **kwargs) -> str:
+        self.calls.append(("get_event", {"assistant_id": assistant_id, **kwargs}))
+        return '{"id":"event-1"}'
+
+    async def check_free_busy(self, assistant_id: str, **kwargs) -> str:
+        self.calls.append(("check_free_busy", {"assistant_id": assistant_id, **kwargs}))
+        return '{"calendars":{}}'
+
+    async def create_event(self, assistant_id: str, **kwargs) -> str:
+        self.calls.append(("create_event", {"assistant_id": assistant_id, **kwargs}))
+        return '{"id":"created"}'
+
+    async def update_event(self, assistant_id: str, **kwargs) -> str:
+        self.calls.append(("update_event", {"assistant_id": assistant_id, **kwargs}))
+        return '{"id":"event-1"}'
+
+    async def delete_event(self, assistant_id: str, **kwargs) -> str:
+        self.calls.append(("delete_event", {"assistant_id": assistant_id, **kwargs}))
+        return '{"deleted":true}'
 
 
 async def test_read_returns_file_contents() -> None:
@@ -372,6 +407,36 @@ async def test_web_search_runs_on_host_adapter_and_records_metered_usage() -> No
             tool_name="web_search",
         )
     ]
+
+
+async def test_calendar_tools_delegate_to_host_google_calendar() -> None:
+    from datetime import UTC, datetime
+
+    calendar = _FakeGoogleCalendar()
+    toolset = _toolset(InMemoryEnvironment(), google_calendar=calendar)
+    start = datetime(2026, 5, 26, 9, 0, tzinfo=UTC)
+    end = datetime(2026, 5, 26, 10, 0, tzinfo=UTC)
+
+    listed = await toolset.calendar_list_calendars()
+    events = await toolset.calendar_list_events("primary", start, end)
+    created = await toolset.calendar_create_event("primary", "Meet", start, end)
+
+    assert listed == '{"items":[{"id":"primary"}]}'
+    assert events == '{"items":[]}'
+    assert created == '{"id":"created"}'
+    assert [name for name, _ in calendar.calls] == [
+        "list_calendars",
+        "list_events",
+        "create_event",
+    ]
+    assert calendar.calls[1][1]["time_min"] == start
+
+
+async def test_calendar_tool_reports_disabled_when_no_adapter() -> None:
+    result = await _toolset(InMemoryEnvironment(), google_calendar=None).calendar_list_calendars()
+
+    assert "ERROR: calendar_list_calendars failed" in result
+    assert "Google Calendar is disabled" in result
 
 
 async def test_list_github_repositories_only_reports_owned_repositories() -> None:

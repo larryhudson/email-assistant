@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     github_token: SecretStr | None = None
     github_timeout_seconds: float = 30.0
 
+    google_workspace_enabled: bool = False
+    google_workspace_credentials_root: Path = Path("data/tool_credentials")
+
     pdf_tools_enabled: bool = True
     prince_path: str = "prince"
     prince_timeout_seconds: float = 30.0

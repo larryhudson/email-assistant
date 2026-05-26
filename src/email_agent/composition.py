@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
     from email_agent.document.port import DocumentToolsPort
     from email_agent.github.port import GitHubPort
+    from email_agent.google_workspace.port import GoogleCalendarPort
     from email_agent.mail.port import EmailProvider
     from email_agent.memory.port import MemoryPort
     from email_agent.pdf.port import PdfRenderPort
@@ -148,6 +149,22 @@ def make_github(settings: Settings) -> "GitHubPort | None":
     )
 
 
+def make_google_calendar(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> "GoogleCalendarPort | None":
+    if not settings.google_workspace_enabled:
+        return None
+
+    from email_agent.google_workspace import GoogleWorkspaceCalendarAdapter
+    from email_agent.tool_credentials import SqlToolCredentialResolver
+
+    return GoogleWorkspaceCalendarAdapter(
+        credential_resolver=SqlToolCredentialResolver(session_factory),
+        credential_root=settings.google_workspace_credentials_root,
+    )
+
+
 def make_runtime_from_settings(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
@@ -159,6 +176,7 @@ def make_runtime_from_settings(
     pdf_renderer: "PdfRenderPort | None" = None,
     document_tools: "DocumentToolsPort | None" = None,
     github: "GitHubPort | None" = None,
+    google_calendar: "GoogleCalendarPort | None" = None,
     use_real_model: bool = True,
     use_real_memory: bool = True,
     use_docker_sandbox: bool = True,
@@ -218,6 +236,8 @@ def make_runtime_from_settings(
         document_tools = make_document_tools(settings)
     if github is None:
         github = make_github(settings)
+    if google_calendar is None:
+        google_calendar = make_google_calendar(settings, session_factory)
     projector = EmailWorkspaceProjector(run_inputs_root=settings.run_inputs_root)
 
     settings.attachments_root.mkdir(parents=True, exist_ok=True)
@@ -251,6 +271,7 @@ def make_runtime_from_settings(
             has_memory=memory is not None,
             has_web_search=search is not None,
             has_document_tools=document_tools is not None,
+            has_google_calendar=google_calendar is not None,
         ),
         projector=projector,
         recorder=recorder,
@@ -258,6 +279,7 @@ def make_runtime_from_settings(
         pdf_renderer=pdf_renderer,
         document_tools=document_tools,
         github=github,
+        google_calendar=google_calendar,
         model_factory=model_factory,
         run_timeout_seconds=run_timeout_seconds,
         run_agent_defer=run_agent_defer,

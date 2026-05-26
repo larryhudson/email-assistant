@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
     from email_agent.document.port import DocumentToolsPort
     from email_agent.github.port import GitHubPort
+    from email_agent.google_workspace.port import GoogleCalendarPort
     from email_agent.pdf.port import PdfRenderPort
 
 from pydantic_ai.messages import ModelMessage
@@ -194,6 +195,7 @@ class AssistantRuntime:
         pdf_renderer: "PdfRenderPort | None" = None,
         document_tools: "DocumentToolsPort | None" = None,
         github: "GitHubPort | None" = None,
+        google_calendar: "GoogleCalendarPort | None" = None,
         admin_base_url: str | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -220,6 +222,7 @@ class AssistantRuntime:
         self._pdf_renderer = pdf_renderer
         self._document_tools = document_tools
         self._github = github
+        self._google_calendar = google_calendar
         self._context_assembler = RunContextAssembler()
         self._admin_base_url = admin_base_url
 
@@ -441,6 +444,7 @@ class AssistantRuntime:
                 pdf_renderer=self._pdf_renderer,
                 document_tools=self._document_tools,
                 github=self._github,
+                google_calendar=self._google_calendar,
             ),
             pending_attachments=pending_attachments,
             metered_usage=metered_usage,

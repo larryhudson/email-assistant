@@ -58,7 +58,12 @@ def test_supported_tool_registry_matches_all_agent_tools():
         model_name="test-model",
     )
 
-    agent = AssistantAgent(has_memory=True, has_web_search=True, has_document_tools=True)
+    agent = AssistantAgent(
+        has_memory=True,
+        has_web_search=True,
+        has_document_tools=True,
+        has_google_calendar=True,
+    )
     built = agent._agent_for(scope)
 
     assert set(built._function_toolset.tools) == set(SUPPORTED_ASSISTANT_TOOLS)

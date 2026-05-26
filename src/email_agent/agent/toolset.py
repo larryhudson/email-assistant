@@ -14,6 +14,7 @@ from pydantic_ai import BinaryContent, ToolReturn
 
 from email_agent.document.port import DocumentToolsPort
 from email_agent.github.port import GitHubPort
+from email_agent.google_workspace.port import GoogleCalendarPort
 from email_agent.models.agent import MeteredUsage
 from email_agent.models.memory import Memory
 from email_agent.models.sandbox import PendingAttachment
@@ -78,6 +79,7 @@ class AgentToolset:
         pdf_renderer: PdfRenderPort | None = None,
         document_tools: DocumentToolsPort | None = None,
         github: GitHubPort | None = None,
+        google_calendar: GoogleCalendarPort | None = None,
         github_clone_runner: Callable[[str, Path], subprocess.CompletedProcess[str]] | None = None,
     ) -> None:
         self._assistant_id = assistant_id
@@ -92,6 +94,7 @@ class AgentToolset:
         self._pdf_renderer = pdf_renderer
         self._document_tools = document_tools
         self._github = github
+        self._google_calendar = google_calendar
         self._github_clone_runner = github_clone_runner or _default_git_clone
 
     async def read(self, path: str) -> str:
@@ -390,6 +393,137 @@ class AgentToolset:
                 detail=repo.full_name,
             )
         return f"cloned {repo.full_name} into {destination}"
+
+    async def calendar_list_calendars(self) -> str:
+        if self._google_calendar is None:
+            return _tool_error("calendar_list_calendars", "Google Calendar is disabled")
+        try:
+            return await self._google_calendar.list_calendars(self._assistant_id)
+        except Exception as exc:
+            return _tool_error("calendar_list_calendars", str(exc))
+
+    async def calendar_list_events(
+        self,
+        calendar_id: str = "primary",
+        time_min: datetime | None = None,
+        time_max: datetime | None = None,
+        query: str | None = None,
+        max_results: int = 50,
+    ) -> str:
+        if self._google_calendar is None:
+            return _tool_error("calendar_list_events", "Google Calendar is disabled")
+        if time_min is None or time_max is None:
+            return _tool_error(
+                "calendar_list_events",
+                "time_min and time_max are required timezone-aware datetimes",
+            )
+        try:
+            return await self._google_calendar.list_events(
+                self._assistant_id,
+                calendar_id=calendar_id,
+                time_min=time_min,
+                time_max=time_max,
+                query=query,
+                max_results=max_results,
+            )
+        except Exception as exc:
+            return _tool_error("calendar_list_events", str(exc))
+
+    async def calendar_get_event(self, calendar_id: str, event_id: str) -> str:
+        if self._google_calendar is None:
+            return _tool_error("calendar_get_event", "Google Calendar is disabled")
+        try:
+            return await self._google_calendar.get_event(
+                self._assistant_id,
+                calendar_id=calendar_id,
+                event_id=event_id,
+            )
+        except Exception as exc:
+            return _tool_error("calendar_get_event", str(exc))
+
+    async def calendar_check_free_busy(
+        self,
+        calendar_ids: list[str],
+        time_min: datetime,
+        time_max: datetime,
+    ) -> str:
+        if self._google_calendar is None:
+            return _tool_error("calendar_check_free_busy", "Google Calendar is disabled")
+        try:
+            return await self._google_calendar.check_free_busy(
+                self._assistant_id,
+                calendar_ids=calendar_ids,
+                time_min=time_min,
+                time_max=time_max,
+            )
+        except Exception as exc:
+            return _tool_error("calendar_check_free_busy", str(exc))
+
+    async def calendar_create_event(
+        self,
+        calendar_id: str,
+        summary: str,
+        start: datetime,
+        end: datetime,
+        description: str | None = None,
+        location: str | None = None,
+        attendees: list[str] | None = None,
+    ) -> str:
+        if self._google_calendar is None:
+            return _tool_error("calendar_create_event", "Google Calendar is disabled")
+        try:
+            return await self._google_calendar.create_event(
+                self._assistant_id,
+                calendar_id=calendar_id,
+                summary=summary,
+                start=start,
+                end=end,
+                description=description,
+                location=location,
+                attendees=attendees,
+            )
+        except Exception as exc:
+            return _tool_error("calendar_create_event", str(exc))
+
+    async def calendar_update_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+        summary: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        description: str | None = None,
+        location: str | None = None,
+        attendees: list[str] | None = None,
+    ) -> str:
+        if self._google_calendar is None:
+            return _tool_error("calendar_update_event", "Google Calendar is disabled")
+        try:
+            return await self._google_calendar.update_event(
+                self._assistant_id,
+                calendar_id=calendar_id,
+                event_id=event_id,
+                summary=summary,
+                start=start,
+                end=end,
+                description=description,
+                location=location,
+                attendees=attendees,
+            )
+        except Exception as exc:
+            return _tool_error("calendar_update_event", str(exc))
+
+    async def calendar_delete_event(self, calendar_id: str, event_id: str) -> str:
+        if self._google_calendar is None:
+            return _tool_error("calendar_delete_event", "Google Calendar is disabled")
+        try:
+            return await self._google_calendar.delete_event(
+                self._assistant_id,
+                calendar_id=calendar_id,
+                event_id=event_id,
+            )
+        except Exception as exc:
+            return _tool_error("calendar_delete_event", str(exc))
 
     async def list_scheduled_tasks(self) -> list[ScheduledTask]:
         if self._scheduled_tasks is None:

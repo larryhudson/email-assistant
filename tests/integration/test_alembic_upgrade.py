@@ -31,6 +31,7 @@ async def test_alembic_upgrade_head_creates_expected_tables():
         "run_memory_recalls",
         "usage_ledger",
         "budgets",
+        "tool_credentials",
         "alembic_version",
         # Procrastinate-owned tables — applied via the proc01 alembic revision.
         "procrastinate_jobs",

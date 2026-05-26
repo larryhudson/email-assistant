@@ -1,5 +1,6 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 
@@ -62,6 +63,51 @@ class _ToolsetLike(Protocol):
     async def clone_github_repository(
         self, repository: str, destination_path: str | None = None
     ) -> str: ...
+
+    async def calendar_list_calendars(self) -> str: ...
+
+    async def calendar_list_events(
+        self,
+        calendar_id: str = "primary",
+        time_min: datetime | None = None,
+        time_max: datetime | None = None,
+        query: str | None = None,
+        max_results: int = 50,
+    ) -> str: ...
+
+    async def calendar_get_event(self, calendar_id: str, event_id: str) -> str: ...
+
+    async def calendar_check_free_busy(
+        self,
+        calendar_ids: list[str],
+        time_min: datetime,
+        time_max: datetime,
+    ) -> str: ...
+
+    async def calendar_create_event(
+        self,
+        calendar_id: str,
+        summary: str,
+        start: datetime,
+        end: datetime,
+        description: str | None = None,
+        location: str | None = None,
+        attendees: list[str] | None = None,
+    ) -> str: ...
+
+    async def calendar_update_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+        summary: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        description: str | None = None,
+        location: str | None = None,
+        attendees: list[str] | None = None,
+    ) -> str: ...
+
+    async def calendar_delete_event(self, calendar_id: str, event_id: str) -> str: ...
 
     async def list_scheduled_tasks(self) -> list[ScheduledTask]: ...
 
