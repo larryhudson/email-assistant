@@ -89,6 +89,7 @@ async def test_ensure_starter_files_creates_context_and_writing_skill_once() -> 
     assert await env.exists("/workspace/skills/writing-skills/SKILL.md")
     assert await env.exists("/workspace/skills/managing-context/SKILL.md")
     assert await env.exists("/workspace/skills/scheduling-tasks/SKILL.md")
+    assert await env.exists("/workspace/skills/managing-calendar-events/SKILL.md")
     assert await env.exists("/workspace/skills/editing-word-documents/SKILL.md")
 
     # Idempotent: customising and re-running must not overwrite user edits.
@@ -125,6 +126,23 @@ async def test_scheduling_tasks_starter_skill_shows_in_rendered_manifest() -> No
     assert "/workspace/skills/scheduling-tasks/SKILL.md" in rendered
     # The description hint that nudges the agent toward the right tools.
     assert "synthetic inbound" in rendered.lower() or "reminder" in rendered.lower()
+
+
+async def test_calendar_events_starter_skill_shows_tool_guidance() -> None:
+    env = InMemoryEnvironment()
+    await ensure_starter_files(env)
+
+    rendered = render_skills_block(await load_skills(env))
+    body = await env.read_text("/workspace/skills/managing-calendar-events/SKILL.md")
+
+    assert "managing-calendar-events" in rendered
+    assert "/workspace/skills/managing-calendar-events/SKILL.md" in rendered
+    assert "use when the user asks about their calendar" in rendered.lower()
+    assert "calendar_create_event" in body
+    assert "calendar_update_event" in body
+    assert "calendar_delete_event" in body
+    assert "timezone-aware" in body
+    assert "scheduling-tasks" in body
 
 
 async def test_editing_word_documents_starter_skill_shows_tool_guidance() -> None:
@@ -241,5 +259,6 @@ async def test_workspace_proxies_skills_and_context() -> None:
         "writing-skills",
         "managing-context",
         "scheduling-tasks",
+        "managing-calendar-events",
         "editing-word-documents",
     } <= skill_names

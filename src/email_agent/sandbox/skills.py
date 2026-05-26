@@ -89,6 +89,11 @@ async def ensure_starter_files(env: SandboxEnvironment) -> None:
         await env.mkdir(f"{SKILLS_DIR}/scheduling-tasks", parents=True)
         await env.write_text(scheduling_skill, _STARTER_SKILL_SCHEDULING_TASKS)
 
+    calendar_skill = f"{SKILLS_DIR}/managing-calendar-events/SKILL.md"
+    if not await env.exists(calendar_skill):
+        await env.mkdir(f"{SKILLS_DIR}/managing-calendar-events", parents=True)
+        await env.write_text(calendar_skill, _STARTER_SKILL_MANAGING_CALENDAR_EVENTS)
+
     onboarding_skill = f"{SKILLS_DIR}/onboarding/SKILL.md"
     if not await env.exists(onboarding_skill):
         await env.mkdir(f"{SKILLS_DIR}/onboarding", parents=True)
@@ -501,6 +506,88 @@ esac
 - For recurring nudges, keep the default `max_unanswered_runs=3` unless the
   user explicitly wants persistent reminders. Set it lower for speculative
   ambient checks and higher for important operational alerts.
+"""
+
+
+_STARTER_SKILL_MANAGING_CALENDAR_EVENTS = """---
+name: managing-calendar-events
+description: Use when the user asks about their calendar, availability, meetings, appointments, event details, or moving/cancelling/rescheduling Google Calendar events.
+---
+
+# Managing Google Calendar events
+
+Use this skill when the user asks about their calendar, availability, meetings,
+appointments, bookings, event details, or moving/cancelling/rescheduling
+calendar entries. Use the dedicated Google Calendar tools, not bash or direct
+API calls from the sandbox.
+
+Do not use calendar events for reminders, follow-ups, periodic checks, or
+background automations. Use the `scheduling-tasks` skill and scheduled-task
+tools for those.
+
+## Tools
+
+- `calendar_list_calendars()` — list calendars available to this assistant's
+  linked Google account. Use this if you need a calendar id or the user asks
+  which calendars exist.
+- `calendar_list_events(calendar_id="primary", time_min, time_max, query=None, max_results=50)` —
+  list events in a time window. `time_min` and `time_max` must be timezone-aware
+  datetimes.
+- `calendar_get_event(calendar_id, event_id)` — inspect one event before
+  updating or deleting it, or when the user asks for details.
+- `calendar_check_free_busy(calendar_ids, time_min, time_max)` — check busy
+  blocks for one or more calendars.
+- `calendar_create_event(calendar_id, summary, start, end, description=None, location=None, attendees=None)` —
+  create an event with explicit timezone-aware start and end datetimes.
+- `calendar_update_event(calendar_id, event_id, summary=None, start=None, end=None, description=None, location=None, attendees=None)` —
+  patch only the fields the user asked to change.
+- `calendar_delete_event(calendar_id, event_id)` — delete one event after you
+  have identified the right event.
+
+## Operating rules
+
+- Check `/workspace/CONTEXT.md` for the user's timezone. If it is missing and
+  the request depends on local time, ask a concise clarification before writing
+  the calendar.
+- Use ISO-8601 timezone-aware datetimes, e.g. `"2026-05-26T14:00:00+01:00"`.
+  Never pass naive datetimes.
+- Before creating, listing nearby events is often useful to avoid duplicates
+  and obvious conflicts. Use `calendar_check_free_busy` when availability is
+  the main question.
+- Before updating or deleting, use `calendar_list_events` or
+  `calendar_get_event` so you act on the intended event id.
+- If the user gives all required details for a low-risk create/update/delete,
+  do it and then confirm briefly. Ask first when the target event, calendar,
+  time, timezone, attendees, or destructive intent is ambiguous.
+- Keep event summaries short and literal. Put notes, agenda, links, and context
+  in `description`; put addresses or video-call locations in `location`.
+- Attendees should be email addresses. If the user names someone but you do not
+  know their email address, ask or create the event without attendees if that
+  is clearly acceptable.
+
+## Common flows
+
+Create a meeting:
+
+1. Resolve the calendar id, usually `"primary"`.
+2. Resolve start/end as timezone-aware datetimes.
+3. Optionally check free/busy if the user asked about availability or conflicts.
+4. Call `calendar_create_event`.
+5. Tell the user the title, date/time, calendar, and attendees.
+
+Move or edit an event:
+
+1. Use `calendar_list_events` for the likely date range and query.
+2. If there are multiple plausible matches, ask which one.
+3. Use `calendar_update_event` with only the changed fields.
+4. Confirm the new details.
+
+Cancel an event:
+
+1. Find the event with `calendar_list_events` or `calendar_get_event`.
+2. If there is any ambiguity, ask before deleting.
+3. Call `calendar_delete_event`.
+4. Confirm what was cancelled.
 """
 
 
