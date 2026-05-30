@@ -56,6 +56,26 @@ class AssistantRouter:
         async with self._session_factory() as session:
             return await self._resolve(session, email)
 
+    async def resolve_assistant_id(self, assistant_id: str) -> RouteOutcome:
+        async with self._session_factory() as session:
+            scope = await self._lookup_by_assistant_id(session, assistant_id)
+            if scope is None:
+                return RouteRejection(
+                    reason=RouteRejectionReason.UNKNOWN_ADDRESS,
+                    detail=f"no assistant for {assistant_id}",
+                )
+            if scope.status is AssistantStatus.PAUSED:
+                return RouteRejection(
+                    reason=RouteRejectionReason.ASSISTANT_PAUSED,
+                    detail=f"assistant {scope.assistant_id} is paused",
+                )
+            if scope.status is AssistantStatus.DISABLED:
+                return RouteRejection(
+                    reason=RouteRejectionReason.ASSISTANT_DISABLED,
+                    detail=f"assistant {scope.assistant_id} is disabled",
+                )
+            return Routed(scope=scope)
+
     async def _resolve(self, session: AsyncSession, email: NormalizedInboundEmail) -> RouteOutcome:
         for to_address in email.to_emails:
             scope = await self._lookup(session, to_address)
@@ -89,6 +109,29 @@ class AssistantRouter:
             .join(Assistant, Assistant.end_user_id == EndUser.id)
             .join(AssistantScopeRow, AssistantScopeRow.assistant_id == Assistant.id)
             .where(Assistant.inbound_address == inbound_address)
+        )
+        row = (await session.execute(stmt)).first()
+        if row is None:
+            return None
+        owner, end_user, assistant, scope_row = row
+        return AssistantScope.from_rows(
+            owner=owner,
+            end_user=end_user,
+            assistant=assistant,
+            scope_row=scope_row,
+        )
+
+    async def _lookup_by_assistant_id(
+        self,
+        session: AsyncSession,
+        assistant_id: str,
+    ) -> AssistantScope | None:
+        stmt = (
+            select(Owner, EndUser, Assistant, AssistantScopeRow)
+            .join(EndUser, EndUser.owner_id == Owner.id)
+            .join(Assistant, Assistant.end_user_id == EndUser.id)
+            .join(AssistantScopeRow, AssistantScopeRow.assistant_id == Assistant.id)
+            .where(Assistant.id == assistant_id)
         )
         row = (await session.execute(stmt)).first()
         if row is None:

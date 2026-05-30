@@ -3,12 +3,18 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 import httpx
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from email_agent.db.models import AssistantSurfaceRow
+from email_agent.runtime.assistant_runtime import Accepted, Dropped
+
+if TYPE_CHECKING:
+    from email_agent.runtime.assistant_runtime import AssistantRuntime
 
 log = logging.getLogger("email_agent.web.surfaces")
 
@@ -60,10 +66,45 @@ def make_template_surface_target(template: str) -> SurfaceTargetResolver:
 def make_surfaces_router(
     session_factory: async_sessionmaker[AsyncSession],
     *,
+    runtime: "AssistantRuntime",
     target_resolver: SurfaceTargetResolver | None = None,
     request_timeout_seconds: float = 30.0,
 ) -> APIRouter:
     router = APIRouter()
+
+    async def run_surface_action(request: Request, assistant_id: str) -> dict[str, str]:
+        settings = await _load_surface_settings(session_factory, assistant_id)
+        if settings is None:
+            raise HTTPException(status_code=404, detail="Assistant surface not found")
+
+        _require_same_origin_action_request(request)
+        _require_json_content_type(request)
+        payload = await _read_action_payload(request)
+        provider_message_id = _provider_message_id(payload)
+        subject = _action_subject(payload)
+        body_text = _action_body_text(payload)
+        message_id_header = _message_id_header(provider_message_id)
+
+        outcome = await runtime.accept_surface_action(
+            assistant_id=assistant_id,
+            subject=subject,
+            body_text=body_text,
+            provider_message_id=provider_message_id,
+            message_id_header=message_id_header,
+        )
+        if isinstance(outcome, Dropped):
+            raise HTTPException(status_code=404, detail=outcome.detail)
+        assert isinstance(outcome, Accepted)
+        if outcome.run_id is None:
+            raise HTTPException(status_code=500, detail="Surface action did not create a run")
+        log.info(
+            "surface action assistant=%s run=%s created=%s provider_message_id=%s",
+            assistant_id,
+            outcome.run_id,
+            outcome.created,
+            provider_message_id,
+        )
+        return {"run_id": outcome.run_id, "status": "queued"}
 
     async def proxy_surface(
         request: Request,
@@ -127,6 +168,11 @@ def make_surfaces_router(
             )
 
     router.add_api_route(
+        "/surfaces/{assistant_id}/_action/run",
+        run_surface_action,
+        methods=["POST"],
+    )
+    router.add_api_route(
         "/surfaces/{assistant_id}",
         proxy_surface,
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
@@ -137,6 +183,81 @@ def make_surfaces_router(
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     )
     return router
+
+
+def _require_same_origin_action_request(request: Request) -> None:
+    sec_fetch_site = request.headers.get("sec-fetch-site")
+    if sec_fetch_site is not None and sec_fetch_site.lower() == "cross-site":
+        raise HTTPException(status_code=403, detail="Cross-origin surface action rejected")
+
+    origin = request.headers.get("origin")
+    if origin is None:
+        return
+
+    expected_origin = f"{request.url.scheme}://{request.url.netloc}"
+    if origin != expected_origin:
+        raise HTTPException(status_code=403, detail="Cross-origin surface action rejected")
+
+
+def _require_json_content_type(request: Request) -> None:
+    content_type = request.headers.get("content-type")
+    if content_type is None:
+        raise HTTPException(status_code=415, detail="Expected application/json content type")
+
+    media_type = content_type.partition(";")[0].strip().lower()
+    if media_type == "application/json":
+        return
+    if media_type.startswith("application/") and media_type.endswith("+json"):
+        return
+    raise HTTPException(status_code=415, detail="Expected application/json content type")
+
+
+async def _read_action_payload(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Expected JSON action payload") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Expected JSON object action payload")
+    return payload
+
+
+def _provider_message_id(payload: dict[str, Any]) -> str:
+    raw = payload.get("idempotency_key")
+    if raw is None:
+        return f"surface-{uuid.uuid4().hex}"
+    if not isinstance(raw, str) or not raw.strip():
+        raise HTTPException(status_code=422, detail="idempotency_key must be a non-empty string")
+    return raw
+
+
+def _action_subject(payload: dict[str, Any]) -> str:
+    raw = payload.get("subject")
+    if raw is None:
+        return "Surface action"
+    if not isinstance(raw, str) or not raw.strip():
+        raise HTTPException(status_code=422, detail="subject must be a non-empty string")
+    return raw
+
+
+def _action_body_text(payload: dict[str, Any]) -> str:
+    raw = payload.get("body_text")
+    if raw is not None:
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=422, detail="body_text must be a string")
+        return raw
+    import json
+
+    return (
+        "Surface action payload\n\n"
+        f"Received at: {datetime.now(UTC).isoformat()}\n\n"
+        f"{json.dumps(payload, indent=2, sort_keys=True)}"
+    )
+
+
+def _message_id_header(provider_message_id: str) -> str:
+    safe = uuid.uuid5(uuid.NAMESPACE_URL, provider_message_id).hex[:16]
+    return f"<surface-{safe}@email-agent>"
 
 
 async def _load_surface_settings(

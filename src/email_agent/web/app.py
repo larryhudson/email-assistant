@@ -148,6 +148,7 @@ def build_app(
         app.include_router(
             make_surfaces_router(
                 session_factory,
+                runtime=runtime,
                 target_resolver=surface_target_resolver,
             )
         )

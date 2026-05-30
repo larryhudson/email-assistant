@@ -105,6 +105,7 @@ class Accepted:
     thread_id: str
     message_id: str
     created: bool
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -308,7 +309,105 @@ class AssistantRuntime:
             thread_id=attached_thread.id,
             message_id=persisted.message.id,
             created=persisted.created,
+            run_id=run_id,
         )
+
+    async def accept_surface_action(
+        self,
+        *,
+        assistant_id: str,
+        subject: str,
+        body_text: str,
+        provider_message_id: str,
+        message_id_header: str,
+    ) -> AcceptOutcome:
+        outcome = await self._router.resolve_assistant_id(assistant_id)
+        if isinstance(outcome, RouteRejection):
+            return Dropped(reason=outcome.reason, detail=outcome.detail)
+        assert isinstance(outcome, Routed)
+        scope = outcome.scope
+
+        existing_run_id = await self._find_run_for_provider_message_id(
+            assistant_id=scope.assistant_id,
+            provider_message_id=provider_message_id,
+        )
+        if existing_run_id is not None:
+            async with self._session_factory() as session:
+                message = (
+                    await session.execute(
+                        select(EmailMessage).where(
+                            EmailMessage.assistant_id == scope.assistant_id,
+                            EmailMessage.provider_message_id == provider_message_id,
+                        )
+                    )
+                ).scalar_one()
+            return Accepted(
+                assistant_id=scope.assistant_id,
+                thread_id=message.thread_id,
+                message_id=message.id,
+                created=False,
+                run_id=existing_run_id,
+            )
+
+        email = NormalizedInboundEmail(
+            provider_message_id=provider_message_id,
+            message_id_header=message_id_header,
+            from_email=scope.owner_email or scope.inbound_address,
+            to_emails=[scope.inbound_address],
+            subject=subject,
+            body_text=body_text,
+            received_at=datetime.now(UTC),
+        )
+
+        thread = await self._resolver.resolve(email, scope)
+        async with self._session_factory() as session:
+            attached_thread = await session.merge(thread)
+            persisted = await persist_inbound(
+                session,
+                email=email,
+                scope=scope,
+                thread=attached_thread,
+                attachments_root=self._attachments_root,
+            )
+            run = await _ensure_queued_run(
+                session,
+                assistant_id=scope.assistant_id,
+                thread_id=attached_thread.id,
+                inbound_message_id=persisted.message.id,
+            )
+            run_id = run.id
+            await session.commit()
+
+        if persisted.created and self._run_agent_defer is not None:
+            await self._run_agent_defer(
+                run_id=run_id,
+                assistant_id=scope.assistant_id,
+            )
+
+        return Accepted(
+            assistant_id=scope.assistant_id,
+            thread_id=attached_thread.id,
+            message_id=persisted.message.id,
+            created=persisted.created,
+            run_id=run_id,
+        )
+
+    async def _find_run_for_provider_message_id(
+        self,
+        *,
+        assistant_id: str,
+        provider_message_id: str,
+    ) -> str | None:
+        async with self._session_factory() as session:
+            stmt = (
+                select(AgentRun.id)
+                .join(EmailMessage, EmailMessage.id == AgentRun.inbound_message_id)
+                .where(
+                    EmailMessage.assistant_id == assistant_id,
+                    EmailMessage.provider_message_id == provider_message_id,
+                )
+            )
+            return (await session.execute(stmt)).scalar_one_or_none()
 
     async def execute_run(self, run_id: str) -> RunOutcome:
         if (
