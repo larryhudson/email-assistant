@@ -157,6 +157,9 @@ def _build_runtime(
     memory: InMemoryMemoryAdapter,
     agent: AssistantAgent,
     search: InMemorySearchAdapter | None = None,
+    assistant_tools_base_url: str = "http://assistant-tools",
+    assistant_tools_token: str | None = None,
+    assistant_surface_base_url_template: str | None = None,
 ) -> AssistantRuntime:
     return AssistantRuntime(
         session_factory,
@@ -172,6 +175,9 @@ def _build_runtime(
         message_id_factory=lambda: "<run-abc@assistants.example.com>",
         provider_message_id_factory=lambda: "prov-out-1",
         search=search,
+        assistant_tools_base_url=assistant_tools_base_url,
+        assistant_tools_token=assistant_tools_token,
+        assistant_surface_base_url_template=assistant_surface_base_url_template,
     )
 
 
@@ -359,6 +365,46 @@ async def test_execute_run_sends_reply_with_code_mode_run_code(
         run = (await session.execute(select(AgentRun))).scalar_one()
         assert run.status == "completed"
         assert run.reply_message_id is not None
+
+
+async def test_execute_run_writes_assistant_platform_environment(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    email_provider = InMemoryEmailProvider()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    memory = InMemoryMemoryAdapter()
+    agent = AssistantAgent()
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        workspace_provider=StaticWorkspaceProvider(workspace),
+        memory=memory,
+        agent=agent,
+        assistant_tools_base_url="http://tools.internal",
+        assistant_tools_token="tools-secret",
+        assistant_surface_base_url_template="https://example.com/surfaces/{assistant_id}",
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    async def quiet(*_):
+        return ModelResponse(parts=[TextPart(content="QUIETLY_EXIT")])
+
+    with agent.override_model(_scope(), FunctionModel(quiet)):
+        outcome = await runtime.execute_run(run_id)
+
+    assert isinstance(outcome, QuietExited)
+    env_file = await workspace.environment.read_text("/workspace/.assistant/env")
+    assert "ASSISTANT_ID='a-1'" in env_file
+    assert "ASSISTANT_TOOLS_BASE_URL='http://tools.internal'" in env_file
+    assert "ASSISTANT_TOOLS_TOKEN='tools-secret'" in env_file
+    assert "ASSISTANT_SURFACE_BASE_URL='https://example.com/surfaces/a-1'" in env_file
 
 
 async def test_execute_run_quietly_exits_when_agent_returns_exact_sentinel(

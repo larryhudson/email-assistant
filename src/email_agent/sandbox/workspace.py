@@ -14,6 +14,8 @@ from email_agent.sandbox.source_projection import project_source
 WORKSPACE_ROOT = "/workspace"
 EMAILS_DIR = "/workspace/emails"
 ATTACHMENTS_DIR = "/workspace/attachments"
+PLATFORM_ENV_DIR = "/workspace/.assistant"
+PLATFORM_ENV_PATH = f"{PLATFORM_ENV_DIR}/env"
 
 
 class WorkspacePolicyError(Exception):
@@ -70,6 +72,25 @@ class AssistantWorkspace:
     async def project_source(self, source_root: Path) -> None:
         await project_source(self._env, source_root)
 
+    async def write_platform_environment(
+        self,
+        *,
+        assistant_id: str,
+        assistant_tools_base_url: str,
+        assistant_surface_base_url: str,
+        assistant_tools_token: str | None = None,
+    ) -> None:
+        await self._env.mkdir(PLATFORM_ENV_DIR, parents=True)
+        lines = [
+            f"ASSISTANT_ID={_shell_env_value(assistant_id)}",
+            f"ASSISTANT_TOOLS_BASE_URL={_shell_env_value(assistant_tools_base_url)}",
+            f"ASSISTANT_SURFACE_BASE_URL={_shell_env_value(assistant_surface_base_url)}",
+        ]
+        if assistant_tools_token is not None:
+            lines.append(f"ASSISTANT_TOOLS_TOKEN={_shell_env_value(assistant_tools_token)}")
+        content = "\n".join([*lines, ""])
+        await self._env.write_text(PLATFORM_ENV_PATH, content)
+
     async def assert_agent_write_allowed(self, path: str) -> None:
         normalized = self._workspace_path(path)
         if normalized == EMAILS_DIR or normalized.startswith(f"{EMAILS_DIR}/"):
@@ -102,9 +123,14 @@ class AssistantWorkspace:
         return str(PurePosixPath(root) / PurePosixPath(path.lstrip("/")))
 
 
+def _shell_env_value(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
 __all__ = [
     "ATTACHMENTS_DIR",
     "EMAILS_DIR",
+    "PLATFORM_ENV_PATH",
     "WORKSPACE_ROOT",
     "AssistantWorkspace",
     "WorkspacePolicyError",

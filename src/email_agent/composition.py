@@ -284,6 +284,13 @@ def make_runtime_from_settings(
         run_timeout_seconds=run_timeout_seconds,
         run_agent_defer=run_agent_defer,
         admin_base_url=settings.admin_base_url,
+        assistant_tools_base_url=settings.assistant_tools_base_url,
+        assistant_tools_token=(
+            settings.assistant_tools_token.get_secret_value()
+            if settings.assistant_tools_token is not None
+            else None
+        ),
+        assistant_surface_base_url_template=settings.assistant_surface_base_url_template,
     )
 
 

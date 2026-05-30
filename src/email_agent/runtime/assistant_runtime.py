@@ -198,6 +198,9 @@ class AssistantRuntime:
         github: "GitHubPort | None" = None,
         google_calendar: "GoogleCalendarPort | None" = None,
         admin_base_url: str | None = None,
+        assistant_tools_base_url: str = "http://assistant-tools",
+        assistant_tools_token: str | None = None,
+        assistant_surface_base_url_template: str | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._attachments_root = attachments_root
@@ -226,6 +229,9 @@ class AssistantRuntime:
         self._google_calendar = google_calendar
         self._context_assembler = RunContextAssembler()
         self._admin_base_url = admin_base_url
+        self._assistant_tools_base_url = assistant_tools_base_url
+        self._assistant_tools_token = assistant_tools_token
+        self._assistant_surface_base_url_template = assistant_surface_base_url_template
 
     @property
     def scheduled_tasks(self) -> ScheduledTaskService:
@@ -432,6 +438,12 @@ class AssistantRuntime:
         ) = await self._load_run(run_id)
         await self._recorder.mark_running(run_id)
         workspace = await self._workspace_provider.get_workspace(scope.assistant_id)
+        await workspace.write_platform_environment(
+            assistant_id=scope.assistant_id,
+            assistant_tools_base_url=self._assistant_tools_base_url,
+            assistant_surface_base_url=self._assistant_surface_base_url(scope.assistant_id),
+            assistant_tools_token=self._assistant_tools_token,
+        )
         inbound_email = _inbound_email_from_message(inbound)
 
         decision = await self._budget.decide(scope)
@@ -738,6 +750,14 @@ class AssistantRuntime:
                 inbound_email=_inbound_email_from_message(inbound),
                 exception=exception,
             )
+
+    def _assistant_surface_base_url(self, assistant_id: str) -> str:
+        template = self._assistant_surface_base_url_template
+        if template is None and self._admin_base_url is not None:
+            template = self._admin_base_url.rstrip("/") + "/surfaces/{assistant_id}"
+        if template is None:
+            return f"/surfaces/{assistant_id}"
+        return template.format(assistant_id=assistant_id)
 
     async def _persist_memory_recalls(self, run_id: str, memories: list[Memory]) -> None:
         """Snapshot what `MemoryPort.recall` returned for this run so the

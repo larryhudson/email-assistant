@@ -114,3 +114,24 @@ class Settings(BaseSettings):
             "ASSISTANT_SURFACE_TARGET_URL_TEMPLATE",
         ),
     )
+    assistant_tools_base_url: str = Field(
+        default="http://assistant-tools",
+        validation_alias=AliasChoices(
+            "EMAIL_AGENT_ASSISTANT_TOOLS_BASE_URL",
+            "ASSISTANT_TOOLS_BASE_URL",
+        ),
+    )
+    assistant_tools_token: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "EMAIL_AGENT_ASSISTANT_TOOLS_TOKEN",
+            "ASSISTANT_TOOLS_TOKEN",
+        ),
+    )
+    assistant_surface_base_url_template: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "EMAIL_AGENT_ASSISTANT_SURFACE_BASE_URL_TEMPLATE",
+            "ASSISTANT_SURFACE_BASE_URL_TEMPLATE",
+        ),
+    )

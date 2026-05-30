@@ -99,6 +99,11 @@ def build_app_from_settings() -> FastAPI:
         ),
         admin_auth_required=True,
         surface_target_resolver=surface_target_resolver,
+        assistant_tools_token=(
+            settings.assistant_tools_token.get_secret_value()
+            if settings.assistant_tools_token is not None
+            else None
+        ),
     )
 
 
@@ -112,6 +117,7 @@ def build_app(
     admin_basic_auth_password: str | None = None,
     admin_auth_required: bool = False,
     surface_target_resolver: "SurfaceTargetResolver | None" = None,
+    assistant_tools_token: str | None = None,
 ) -> FastAPI:
     """Build the FastAPI app with its handler dependencies wired in.
 
@@ -135,6 +141,7 @@ def build_app(
 
     if session_factory is not None:
         from email_agent.web.admin.router import mount_admin
+        from email_agent.web.assistant_tools import make_assistant_tools_router
         from email_agent.web.surfaces import make_surfaces_router
 
         _protect_admin(
@@ -145,6 +152,13 @@ def build_app(
             protected_prefixes=("/admin", "/surfaces"),
         )
         mount_admin(app, session_factory)
+        app.include_router(
+            make_assistant_tools_router(
+                session_factory,
+                runtime=runtime,
+                shared_token=assistant_tools_token,
+            )
+        )
         app.include_router(
             make_surfaces_router(
                 session_factory,

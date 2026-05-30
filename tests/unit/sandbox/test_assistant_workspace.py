@@ -68,3 +68,35 @@ async def test_agent_write_policy_allows_non_email_paths(path: str) -> None:
     workspace = AssistantWorkspace(InMemoryEnvironment())
 
     await workspace.assert_agent_write_allowed(path)
+
+
+async def test_write_platform_environment_exposes_assistant_surface_urls() -> None:
+    env = InMemoryEnvironment()
+    workspace = AssistantWorkspace(env)
+
+    await workspace.write_platform_environment(
+        assistant_id="a-1",
+        assistant_tools_base_url="http://assistant-tools",
+        assistant_surface_base_url="https://example.com/surfaces/a-1",
+    )
+
+    env_file = await env.read_text("/workspace/.assistant/env")
+    assert "ASSISTANT_ID='a-1'" in env_file
+    assert "ASSISTANT_TOOLS_BASE_URL='http://assistant-tools'" in env_file
+    assert "ASSISTANT_SURFACE_BASE_URL='https://example.com/surfaces/a-1'" in env_file
+    assert "ASSISTANT_TOOLS_TOKEN" not in env_file
+
+
+async def test_write_platform_environment_exposes_tools_token_only_when_configured() -> None:
+    env = InMemoryEnvironment()
+    workspace = AssistantWorkspace(env)
+
+    await workspace.write_platform_environment(
+        assistant_id="a-1",
+        assistant_tools_base_url="http://assistant-tools",
+        assistant_surface_base_url="https://example.com/surfaces/a-1",
+        assistant_tools_token="secret-value",
+    )
+
+    env_file = await env.read_text("/workspace/.assistant/env")
+    assert "ASSISTANT_TOOLS_TOKEN='secret-value'" in env_file
