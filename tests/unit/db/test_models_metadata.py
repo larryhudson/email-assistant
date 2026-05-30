@@ -10,6 +10,7 @@ def test_expected_tables_are_registered():
         "end_users",
         "assistants",
         "assistant_scopes",
+        "assistant_surfaces",
         "email_threads",
         "email_messages",
         "email_attachments",
@@ -50,6 +51,18 @@ def test_tool_credentials_column_shape():
         "status",
         "last_verified_at",
         "last_error",
+        "created_at",
+        "updated_at",
+    } <= columns
+
+
+def test_assistant_surfaces_column_shape():
+    t = Base.metadata.tables["assistant_surfaces"]
+    columns = {c.name for c in t.columns}
+    assert {
+        "assistant_id",
+        "enabled",
+        "port",
         "created_at",
         "updated_at",
     } <= columns

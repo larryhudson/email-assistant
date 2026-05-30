@@ -102,3 +102,15 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("EMAIL_AGENT_ADMIN_BASE_URL", "ADMIN_BASE_URL"),
     )
+
+    # Explicit target for assistant surface proxying. Example for a local
+    # published port: `http://127.0.0.1:{port}`. Docker-backed workspaces do
+    # not publish ports by default, so there is intentionally no implicit
+    # localhost fallback in the production settings path.
+    assistant_surface_target_url_template: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "EMAIL_AGENT_SURFACE_TARGET_URL_TEMPLATE",
+            "ASSISTANT_SURFACE_TARGET_URL_TEMPLATE",
+        ),
+    )

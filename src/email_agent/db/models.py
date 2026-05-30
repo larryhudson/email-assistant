@@ -98,6 +98,20 @@ class AssistantScopeRow(Base):
     assistant: Mapped[Assistant] = relationship(back_populates="scope")
 
 
+class AssistantSurfaceRow(Base):
+    """Minimal per-assistant surface proxy settings."""
+
+    __tablename__ = "assistant_surfaces"
+
+    assistant_id: Mapped[str] = mapped_column(ForeignKey("assistants.id"), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    port: Mapped[int] = mapped_column(Integer, default=8000, server_default="8000")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class EmailThread(Base):
     """A conversation an assistant has with an end user.
 
@@ -395,6 +409,7 @@ __all__ = [
     "AgentRun",
     "Assistant",
     "AssistantScopeRow",
+    "AssistantSurfaceRow",
     "Base",
     "Budget",
     "EmailAttachmentRow",

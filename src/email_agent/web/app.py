@@ -3,6 +3,7 @@ import binascii
 import json
 import logging
 import secrets
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request, Response
@@ -11,6 +12,8 @@ from starlette.datastructures import UploadFile
 if TYPE_CHECKING:
     from procrastinate import App as ProcrastinateApp
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from email_agent.web.surfaces import SurfaceTargetResolver
 
 from email_agent.mail.mailgun import (
     MailgunEmailProvider,
@@ -76,6 +79,13 @@ def build_app_from_settings() -> FastAPI:
         run_agent_defer=defer_run_agent,
     )
     settings.attachments_root.mkdir(parents=True, exist_ok=True)
+    surface_target_resolver = None
+    if settings.assistant_surface_target_url_template is not None:
+        from email_agent.web.surfaces import make_template_surface_target
+
+        surface_target_resolver = make_template_surface_target(
+            settings.assistant_surface_target_url_template
+        )
     return build_app(
         provider=provider,
         runtime=runtime,
@@ -88,6 +98,7 @@ def build_app_from_settings() -> FastAPI:
             else None
         ),
         admin_auth_required=True,
+        surface_target_resolver=surface_target_resolver,
     )
 
 
@@ -100,6 +111,7 @@ def build_app(
     admin_basic_auth_username: str | None = None,
     admin_basic_auth_password: str | None = None,
     admin_auth_required: bool = False,
+    surface_target_resolver: "SurfaceTargetResolver | None" = None,
 ) -> FastAPI:
     """Build the FastAPI app with its handler dependencies wired in.
 
@@ -123,14 +135,22 @@ def build_app(
 
     if session_factory is not None:
         from email_agent.web.admin.router import mount_admin
+        from email_agent.web.surfaces import make_surfaces_router
 
         _protect_admin(
             app,
             username=admin_basic_auth_username,
             password=admin_basic_auth_password,
             required=admin_auth_required,
+            protected_prefixes=("/admin", "/surfaces"),
         )
         mount_admin(app, session_factory)
+        app.include_router(
+            make_surfaces_router(
+                session_factory,
+                target_resolver=surface_target_resolver,
+            )
+        )
 
     @app.post("/webhooks/mailgun")
     async def mailgun_webhook(request: Request) -> Response:
@@ -196,13 +216,14 @@ def _protect_admin(
     username: str | None,
     password: str | None,
     required: bool,
+    protected_prefixes: Sequence[str] = ("/admin",),
 ) -> None:
     if not required and (not username or not password):
         return
 
     @app.middleware("http")
     async def admin_basic_auth(request: Request, call_next):
-        if not request.url.path.startswith("/admin"):
+        if not any(request.url.path.startswith(prefix) for prefix in protected_prefixes):
             return await call_next(request)
 
         if not username or not password:

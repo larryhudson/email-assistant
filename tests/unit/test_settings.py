@@ -37,6 +37,7 @@ def test_settings_loads_required_fields(monkeypatch):
     assert s.document_tools_enabled is False
     assert s.google_workspace_enabled is False
     assert s.google_workspace_credentials_root == Path("data/tool_credentials")
+    assert s.assistant_surface_target_url_template is None
 
 
 def test_settings_accepts_bashkit_sandbox_provider(monkeypatch):
@@ -53,6 +54,25 @@ def test_settings_accepts_bashkit_sandbox_provider(monkeypatch):
     s = Settings()  # ty: ignore[missing-argument]
 
     assert s.sandbox_provider == "bashkit"
+
+
+def test_settings_accepts_assistant_surface_target_url_template(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@localhost:5432/db")
+    monkeypatch.setenv("MAILGUN_SIGNING_KEY", "sig")
+    monkeypatch.setenv("MAILGUN_API_KEY", "api")
+    monkeypatch.setenv("MAILGUN_DOMAIN", "mg.example.com")
+    monkeypatch.setenv("MAILGUN_WEBHOOK_URL", "https://example.com/hook")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw")
+    monkeypatch.setenv("COGNEE_LLM_API_KEY", "cog-llm")
+    monkeypatch.setenv("COGNEE_EMBEDDING_API_KEY", "cog-emb")
+    monkeypatch.setenv(
+        "EMAIL_AGENT_SURFACE_TARGET_URL_TEMPLATE",
+        "http://{assistant_id}.surface.local:{port}",
+    )
+
+    s = Settings(_env_file=None)  # ty: ignore[missing-argument, unknown-argument]
+
+    assert s.assistant_surface_target_url_template == "http://{assistant_id}.surface.local:{port}"
 
 
 def test_settings_missing_required_field_raises(monkeypatch):
