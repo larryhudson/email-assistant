@@ -19,10 +19,12 @@ from email_agent.db.models import (
     EmailMessage,
     EndUser,
     Owner,
+    SurfaceTokenRow,
 )
 from email_agent.mail.mailgun import MailgunEmailProvider
 from email_agent.runtime.assistant_runtime import AssistantRuntime
 from email_agent.web.app import build_app
+from email_agent.web.surface_tokens import hash_surface_token
 from email_agent.web.surfaces import SurfaceProxySettings, make_template_surface_target
 
 
@@ -39,6 +41,23 @@ async def _enable_surface(
 ) -> None:
     async with session_factory() as session:
         session.add(AssistantSurfaceRow(assistant_id=assistant_id, enabled=True, port=port))
+        await session.commit()
+
+
+async def _add_surface_token(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    assistant_id: str = "a-1",
+    token: str = "shortcut-token",
+) -> None:
+    async with session_factory() as session:
+        session.add(
+            SurfaceTokenRow(
+                id="st-1",
+                assistant_id=assistant_id,
+                token_hash=hash_surface_token(token),
+            )
+        )
         await session.commit()
 
 
@@ -222,6 +241,184 @@ async def test_surface_proxies_to_configured_port_and_path(
     assert "authorization" not in forwarded
     assert "cookie" not in forwarded
     assert "x-viewer-email" not in forwarded
+
+
+async def test_surface_api_accepts_valid_bearer_token_without_basic_auth(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_assistant(sqlite_session_factory)
+    await _enable_surface(sqlite_session_factory, port=8123)
+    await _add_surface_token(sqlite_session_factory, token="shortcut-token")
+    seen: dict[str, object] = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc_info: object) -> None:
+            return None
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            *,
+            content: bytes,
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            seen.update({"url": url, "headers": headers})
+            return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr("email_agent.web.surfaces.httpx.AsyncClient", FakeAsyncClient)
+    app = _build_app(sqlite_session_factory, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/surfaces/a-1/api/capture",
+            json={"amount": 14.5},
+            headers={"Authorization": "Bearer shortcut-token"},
+        )
+
+    assert response.status_code == 200
+    assert seen["url"] == "http://surface.test:8123/api/capture"
+    seen_headers = cast(dict[str, str], seen["headers"])
+    forwarded = {k.lower(): v for k, v in seen_headers.items()}
+    assert forwarded["x-surface-auth"] == "api_token"
+    assert "authorization" not in forwarded
+
+
+async def test_surface_api_rejects_invalid_bearer_token(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    await _seed_assistant(sqlite_session_factory)
+    await _enable_surface(sqlite_session_factory)
+    await _add_surface_token(sqlite_session_factory, token="shortcut-token")
+    app = _build_app(sqlite_session_factory, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/surfaces/a-1/api/capture",
+            json={"amount": 14.5},
+            headers={"Authorization": "Bearer wrong"},
+        )
+
+    assert response.status_code == 401
+    assert response.text == "Invalid surface token\n"
+
+
+async def test_surface_api_rejects_revoked_bearer_token(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    await _seed_assistant(sqlite_session_factory)
+    await _enable_surface(sqlite_session_factory)
+    await _add_surface_token(sqlite_session_factory, token="shortcut-token")
+
+    async with sqlite_session_factory() as session:
+        row = (await session.execute(select(SurfaceTokenRow))).scalar_one()
+        row.revoked_at = datetime.now(UTC)
+        await session.commit()
+
+    app = _build_app(sqlite_session_factory, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/surfaces/a-1/api/capture",
+            json={"amount": 14.5},
+            headers={"Authorization": "Bearer shortcut-token"},
+        )
+
+    assert response.status_code == 401
+    assert response.text == "Invalid surface token\n"
+
+
+async def test_surface_bearer_token_is_limited_to_api_routes(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    await _seed_assistant(sqlite_session_factory)
+    await _enable_surface(sqlite_session_factory)
+    await _add_surface_token(sqlite_session_factory, token="shortcut-token")
+    app = _build_app(sqlite_session_factory, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/surfaces/a-1/",
+            headers={"Authorization": "Bearer shortcut-token"},
+        )
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == 'Basic realm="email-assistant admin"'
+
+
+async def test_admin_can_create_one_surface_token_per_assistant(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    await _seed_assistant(sqlite_session_factory)
+    app = _build_app(sqlite_session_factory, tmp_path)
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/admin/assistants/a-1/surface-token",
+            headers={"Authorization": _basic_auth()},
+        )
+        second = client.post(
+            "/admin/assistants/a-1/surface-token",
+            headers={"Authorization": _basic_auth()},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["token"].startswith("st_")
+    assert second.json()["token"].startswith("st_")
+    assert second.json()["token"] != first.json()["token"]
+
+    async with sqlite_session_factory() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(SurfaceTokenRow).where(SurfaceTokenRow.assistant_id == "a-1")
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert len(rows) == 2
+    assert sum(1 for row in rows if row.revoked_at is None) == 1
+    assert all(
+        row.token_hash not in {first.json()["token"], second.json()["token"]} for row in rows
+    )
+
+
+async def test_admin_can_revoke_surface_token(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    await _seed_assistant(sqlite_session_factory)
+    await _add_surface_token(sqlite_session_factory, token="shortcut-token")
+    app = _build_app(sqlite_session_factory, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.delete(
+            "/admin/assistants/a-1/surface-token",
+            headers={"Authorization": _basic_auth()},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"assistant_id": "a-1", "revoked": 1}
+
+    async with sqlite_session_factory() as session:
+        row = (await session.execute(select(SurfaceTokenRow))).scalar_one()
+
+    assert row.revoked_at is not None
 
 
 def test_template_surface_target_uses_assistant_id_and_port() -> None:

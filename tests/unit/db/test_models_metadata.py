@@ -11,6 +11,7 @@ def test_expected_tables_are_registered():
         "assistants",
         "assistant_scopes",
         "assistant_surfaces",
+        "surface_tokens",
         "email_threads",
         "email_messages",
         "email_attachments",
@@ -65,6 +66,18 @@ def test_assistant_surfaces_column_shape():
         "port",
         "created_at",
         "updated_at",
+    } <= columns
+
+
+def test_surface_tokens_column_shape():
+    t = Base.metadata.tables["surface_tokens"]
+    columns = {c.name for c in t.columns}
+    assert {
+        "id",
+        "assistant_id",
+        "token_hash",
+        "created_at",
+        "revoked_at",
     } <= columns
 
 

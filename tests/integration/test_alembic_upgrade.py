@@ -23,6 +23,7 @@ async def test_alembic_upgrade_head_creates_expected_tables():
         "assistants",
         "assistant_scopes",
         "assistant_surfaces",
+        "surface_tokens",
         "email_threads",
         "email_messages",
         "email_attachments",

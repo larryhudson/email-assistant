@@ -112,6 +112,20 @@ class AssistantSurfaceRow(Base):
     )
 
 
+class SurfaceTokenRow(Base):
+    """Static bearer token for assistant API surface routes."""
+
+    __tablename__ = "surface_tokens"
+
+    id: Mapped[str] = _str_pk()
+    assistant_id: Mapped[str] = mapped_column(ForeignKey("assistants.id"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_surface_tokens_assistant_id", "assistant_id"),)
+
+
 class EmailThread(Base):
     """A conversation an assistant has with an end user.
 
@@ -421,6 +435,7 @@ __all__ = [
     "RunStep",
     "ScheduledTaskFireRow",
     "ScheduledTaskRow",
+    "SurfaceTokenRow",
     "ToolCredentialRow",
     "UsageLedger",
 ]

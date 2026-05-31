@@ -238,6 +238,8 @@ def _protect_admin(
 
     @app.middleware("http")
     async def admin_basic_auth(request: Request, call_next):
+        if _is_surface_api_bearer_request(request):
+            return await call_next(request)
         if not any(request.url.path.startswith(prefix) for prefix in protected_prefixes):
             return await call_next(request)
 
@@ -260,6 +262,18 @@ def _protect_admin(
             status_code=401,
             headers={"WWW-Authenticate": 'Basic realm="email-assistant admin"'},
         )
+
+
+def _is_surface_api_bearer_request(request: Request) -> bool:
+    if not _is_surface_api_path(request.url.path):
+        return False
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    return scheme.lower() == "bearer" and bool(token)
+
+
+def _is_surface_api_path(path: str) -> bool:
+    parts = path.split("/")
+    return len(parts) >= 4 and parts[1] == "surfaces" and parts[3] == "api"
 
 
 def _parse_basic_auth(header: str | None) -> tuple[str | None, str | None]:

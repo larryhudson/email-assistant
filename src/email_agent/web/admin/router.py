@@ -30,6 +30,10 @@ from email_agent.db.models import (
     RunStep,
     UsageLedger,
 )
+from email_agent.web.surface_tokens import (
+    create_surface_token,
+    revoke_surface_tokens_for_assistant,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -176,6 +180,27 @@ def make_admin_router(session_factory: async_sessionmaker[AsyncSession]) -> APIR
             },
         )
 
+    @router.post("/assistants/{assistant_id}/surface-token")
+    async def create_assistant_surface_token(assistant_id: str) -> dict[str, str]:
+        if not await _assistant_exists(session_factory, assistant_id):
+            raise HTTPException(status_code=404, detail=f"assistant {assistant_id} not found")
+        token = await create_surface_token(session_factory, assistant_id=assistant_id)
+        return {
+            "assistant_id": assistant_id,
+            "token_id": token.id,
+            "token": token.token,
+        }
+
+    @router.delete("/assistants/{assistant_id}/surface-token")
+    async def revoke_assistant_surface_token(assistant_id: str) -> dict[str, str | int]:
+        if not await _assistant_exists(session_factory, assistant_id):
+            raise HTTPException(status_code=404, detail=f"assistant {assistant_id} not found")
+        revoked = await revoke_surface_tokens_for_assistant(
+            session_factory,
+            assistant_id=assistant_id,
+        )
+        return {"assistant_id": assistant_id, "revoked": revoked}
+
     return router
 
 
@@ -235,6 +260,14 @@ async def _load_assistant_ids(
     async with session_factory() as session:
         result = await session.execute(select(Assistant.id).order_by(Assistant.id))
         return [r[0] for r in result.all()]
+
+
+async def _assistant_exists(
+    session_factory: async_sessionmaker[AsyncSession],
+    assistant_id: str,
+) -> bool:
+    async with session_factory() as session:
+        return await session.get(Assistant, assistant_id) is not None
 
 
 async def _load_runs(

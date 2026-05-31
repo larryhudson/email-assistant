@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from email_agent.db.models import AssistantSurfaceRow
 from email_agent.runtime.assistant_runtime import Accepted, Dropped
+from email_agent.web.surface_tokens import verify_surface_token
 
 if TYPE_CHECKING:
     from email_agent.runtime.assistant_runtime import AssistantRuntime
@@ -119,6 +120,24 @@ def make_surfaces_router(
             if settings is None:
                 status_code = 404
                 return Response("Assistant surface not found\n", status_code=status_code)
+
+            bearer_token = _bearer_token(request)
+            if bearer_token is not None:
+                if not _is_api_surface_path(path):
+                    status_code = 401
+                    return Response(
+                        "Bearer tokens are only valid for API surfaces\n",
+                        status_code=status_code,
+                    )
+                if not await verify_surface_token(
+                    session_factory,
+                    assistant_id=assistant_id,
+                    token=bearer_token,
+                ):
+                    status_code = 401
+                    return Response("Invalid surface token\n", status_code=status_code)
+                auth_mode = "api_token"
+
             if target_resolver is None:
                 status_code = 503
                 return Response(
@@ -258,6 +277,17 @@ def _action_body_text(payload: dict[str, Any]) -> str:
 def _message_id_header(provider_message_id: str) -> str:
     safe = uuid.uuid5(uuid.NAMESPACE_URL, provider_message_id).hex[:16]
     return f"<surface-{safe}@email-agent>"
+
+
+def _bearer_token(request: Request) -> str | None:
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return token
+
+
+def _is_api_surface_path(path: str) -> bool:
+    return path == "api" or path.startswith("api/")
 
 
 async def _load_surface_settings(
