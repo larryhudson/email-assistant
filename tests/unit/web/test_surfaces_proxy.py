@@ -348,6 +348,47 @@ async def test_surface_proxies_to_configured_port_and_path(
     assert "x-viewer-email" not in forwarded
 
 
+async def test_surface_rewrites_root_relative_redirect_locations(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _enable_surface(sqlite_session_factory)
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc_info: object) -> None:
+            return None
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            *,
+            content: bytes,
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            return httpx.Response(303, headers={"location": "/"})
+
+    monkeypatch.setattr("email_agent.web.surfaces.httpx.AsyncClient", FakeAsyncClient)
+    app = _build_app(sqlite_session_factory, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/surfaces/a-1/add-workout",
+            headers={"Authorization": _basic_auth()},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/surfaces/a-1/"
+
+
 async def test_surface_rewrites_root_relative_html_urls(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,

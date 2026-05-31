@@ -213,7 +213,7 @@ def make_surfaces_router(
             return Response(
                 content=response_content,
                 status_code=upstream.status_code,
-                headers=_response_headers(upstream.headers),
+                headers=_response_headers(upstream.headers, assistant_id=assistant_id),
             )
         except httpx.TimeoutException:
             status_code = 504
@@ -594,13 +594,25 @@ def _forward_headers(
     return forwarded
 
 
-def _response_headers(headers) -> dict[str, str]:
-    return {
-        name: value
-        for name, value in headers.items()
-        if name.lower() not in HOP_BY_HOP_HEADERS
-        and name.lower() not in RECALCULATED_RESPONSE_HEADERS
-    }
+def _response_headers(headers, *, assistant_id: str) -> dict[str, str]:
+    response_headers: dict[str, str] = {}
+    for name, value in headers.items():
+        lower_name = name.lower()
+        if lower_name in HOP_BY_HOP_HEADERS or lower_name in RECALCULATED_RESPONSE_HEADERS:
+            continue
+        if lower_name == "location":
+            value = _rewrite_surface_location(value, assistant_id=assistant_id)
+        response_headers[name] = value
+    return response_headers
+
+
+def _rewrite_surface_location(value: str, *, assistant_id: str) -> str:
+    if not _is_rewritable_root_relative_url(value):
+        return value
+    prefix = f"/surfaces/{assistant_id}"
+    if value == prefix or value.startswith(f"{prefix}/"):
+        return value
+    return f"{prefix}{value}"
 
 
 __all__ = [
