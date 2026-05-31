@@ -90,6 +90,7 @@ async def test_ensure_starter_files_creates_context_and_writing_skill_once() -> 
     assert await env.exists("/workspace/skills/managing-context/SKILL.md")
     assert await env.exists("/workspace/skills/scheduling-tasks/SKILL.md")
     assert await env.exists("/workspace/skills/managing-calendar-events/SKILL.md")
+    assert await env.exists("/workspace/skills/assistant-surfaces/SKILL.md")
     assert await env.exists("/workspace/skills/editing-word-documents/SKILL.md")
 
     # Idempotent: customising and re-running must not overwrite user edits.
@@ -158,6 +159,23 @@ async def test_editing_word_documents_starter_skill_shows_tool_guidance() -> Non
     assert "fix_margins" in body
     assert "python3 /workspace/scripts/fix_margins.py" in body
     assert "soffice --headless" in body
+
+
+async def test_assistant_surfaces_starter_skill_shows_surface_guidance() -> None:
+    env = InMemoryEnvironment()
+    await ensure_starter_files(env)
+
+    rendered = render_skills_block(await load_skills(env))
+    body = await env.read_text("/workspace/skills/assistant-surfaces/SKILL.md")
+
+    assert "assistant-surfaces" in rendered
+    assert "/workspace/skills/assistant-surfaces/SKILL.md" in rendered
+    assert "dashboards" in rendered
+    assert "ASSISTANT_SURFACE_BASE_URL" in body
+    assert "platform owns" in body
+    assert "ASSISTANT_TOOLS_BASE_URL" in body
+    assert "curl -fsS http://localhost:8000/" in body
+    assert "/api/capture-expense" in body
 
 
 async def test_skill_written_during_one_run_is_visible_to_next_load() -> None:
@@ -260,5 +278,6 @@ async def test_workspace_proxies_skills_and_context() -> None:
         "managing-context",
         "scheduling-tasks",
         "managing-calendar-events",
+        "assistant-surfaces",
         "editing-word-documents",
     } <= skill_names

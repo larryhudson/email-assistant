@@ -99,6 +99,11 @@ async def ensure_starter_files(env: SandboxEnvironment) -> None:
         await env.mkdir(f"{SKILLS_DIR}/onboarding", parents=True)
         await env.write_text(onboarding_skill, _STARTER_SKILL_ONBOARDING)
 
+    assistant_surfaces_skill = f"{SKILLS_DIR}/assistant-surfaces/SKILL.md"
+    if not await env.exists(assistant_surfaces_skill):
+        await env.mkdir(f"{SKILLS_DIR}/assistant-surfaces", parents=True)
+        await env.write_text(assistant_surfaces_skill, _STARTER_SKILL_ASSISTANT_SURFACES)
+
     document_skill = f"{SKILLS_DIR}/editing-word-documents/SKILL.md"
     await env.mkdir(f"{SKILLS_DIR}/editing-word-documents", parents=True)
     await env.write_text(document_skill, _STARTER_SKILL_EDITING_WORD_DOCUMENTS)
@@ -778,6 +783,162 @@ bash('soffice --headless --convert-to pdf --outdir /workspace/previews "/workspa
 preview_pdf("previews/brochure-fixed.pdf", page=1)
 attach_file("docs/brochure-fixed.docx")
 ```
+"""
+
+
+_STARTER_SKILL_ASSISTANT_SURFACES = """---
+name: assistant-surfaces
+description: Create a small HTTP surface when email is a poor fit, such as dashboards, review screens, forms, or API endpoints for Shortcuts.
+---
+
+# Assistant surfaces
+
+Use an assistant surface when the user would be better served by a small
+frontend than another email. Good fits:
+
+- A dashboard showing current state, recent runs, open items, or a table that
+  is awkward to inspect in prose.
+- A repeated form or review screen where the user needs to enter or approve
+  structured data.
+- A simple API endpoint for Apple Shortcuts or another personal automation.
+- A presentation of files, drafts, or database state that benefits from
+  filtering, sorting, or quick actions.
+
+Email is still enough for one-off answers, short status updates, simple
+approvals, or anything where a link would add friction.
+
+## Platform contract
+
+Run your surface server inside the workspace on port `8000`. The platform owns
+the public edge, auth, and routing. Do not build your own login screen or token
+system for the surface.
+
+Use `ASSISTANT_SURFACE_BASE_URL` when sending the user a public link:
+
+```
+${ASSISTANT_SURFACE_BASE_URL}/
+${ASSISTANT_SURFACE_BASE_URL}/api/capture-expense
+```
+
+Browser pages are protected by platform-owned owner auth. API routes under
+`/api/...` may be called with platform-issued bearer tokens, for example from
+Apple Shortcuts. Treat route code as assistant-owned application logic, not as
+the security boundary.
+
+If the surface needs to trigger a privileged assistant/platform action, prefer
+the Assistant Tools API exposed through `ASSISTANT_TOOLS_BASE_URL` and its
+OpenAPI document. Keep direct state changes small and obvious.
+
+## Simple dashboard
+
+Create a minimal FastAPI app:
+
+```
+write(
+    "surface.py",
+    '''
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+
+app = FastAPI()
+
+ITEMS = [
+    {"label": "Receipts waiting", "value": 3},
+    {"label": "This month spend", "value": "£142.80"},
+]
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard():
+    rows = "".join(
+        f"<tr><td>{item['label']}</td><td>{item['value']}</td></tr>"
+        for item in ITEMS
+    )
+    return (
+        "<html>"
+        "<head><title>Budget dashboard</title></head>"
+        "<body>"
+        "<h1>Budget dashboard</h1>"
+        f"<table>{rows}</table>"
+        "</body>"
+        "</html>"
+    )
+''',
+)
+bash("uvicorn surface:app --host 0.0.0.0 --port 8000")
+```
+
+If you need the shell back, start it in the background instead:
+
+```
+bash("uvicorn surface:app --host 0.0.0.0 --port 8000 > /tmp/surface.log 2>&1 &")
+```
+
+Then send the user the platform URL, not `localhost`:
+
+```
+${ASSISTANT_SURFACE_BASE_URL}/
+```
+
+## API endpoint
+
+Use `/api/...` for personal automations that post JSON:
+
+```
+write(
+    "surface.py",
+    '''
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class Expense(BaseModel):
+    merchant: str
+    amount: float
+    category: str | None = None
+
+@app.post("/api/capture-expense")
+async def capture_expense(expense: Expense):
+    # Replace this with a real write to your workspace file or database.
+    return {"ok": True, "merchant": expense.merchant, "amount": expense.amount}
+''',
+)
+```
+
+Apple Shortcuts should call the public URL with its platform-issued bearer
+token:
+
+```
+curl -sS \
+  -H "Authorization: Bearer $SURFACE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"merchant":"Pret","amount":14.5,"category":"Lunch"}' \
+  "$ASSISTANT_SURFACE_BASE_URL/api/capture-expense"
+```
+
+## Local curl tests
+
+Before sending a link or Shortcut instructions to the user, smoke-test the
+workspace server locally:
+
+```
+bash("curl -fsS http://localhost:8000/")
+bash('curl -fsS -H "Content-Type: application/json" -d \'{"merchant":"Pret","amount":14.5}\' http://localhost:8000/api/capture-expense')
+```
+
+If local curl fails, fix the workspace server before involving the user. If
+local curl passes but the public URL fails, the issue is probably platform
+routing or surface configuration; report that clearly rather than adding app
+auth or changing ports.
+
+## Keep it small
+
+- Prefer one file and obvious routes.
+- Make the UI specific to the user's task instead of building a generic app.
+- Keep sensitive operations behind platform-owned auth and Assistant Tools API
+  calls.
+- Avoid storing secrets in the surface code.
+- Remove or simplify routes that no longer serve the user's workflow.
 """
 
 
