@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     sandbox_bashkit_sqlite_enabled: bool = True
     sandbox_memory_mb: int = 512
     sandbox_cpu_cores: float = 1.0
+    sandbox_docker_network: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "EMAIL_AGENT_SANDBOX_DOCKER_NETWORK",
+            "SANDBOX_DOCKER_NETWORK",
+        ),
+    )
 
     attachments_root: Path = Path("data/attachments")
     cognee_data_root: Path = Path("data/cognee")
@@ -112,6 +119,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "EMAIL_AGENT_SURFACE_TARGET_URL_TEMPLATE",
             "ASSISTANT_SURFACE_TARGET_URL_TEMPLATE",
+        ),
+    )
+    assistant_surface_target_provider: Literal["template", "docker"] = Field(
+        default="template",
+        validation_alias=AliasChoices(
+            "EMAIL_AGENT_SURFACE_TARGET_PROVIDER",
+            "ASSISTANT_SURFACE_TARGET_PROVIDER",
         ),
     )
     assistant_tools_base_url: str = Field(

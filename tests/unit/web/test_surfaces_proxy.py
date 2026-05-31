@@ -1,8 +1,9 @@
 import base64
+import gzip
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -25,7 +26,12 @@ from email_agent.mail.mailgun import MailgunEmailProvider
 from email_agent.runtime.assistant_runtime import AssistantRuntime
 from email_agent.web.app import build_app
 from email_agent.web.surface_tokens import hash_surface_token
-from email_agent.web.surfaces import SurfaceProxySettings, make_template_surface_target
+from email_agent.web.surfaces import (
+    SurfaceProxySettings,
+    SurfaceTargetUnavailableError,
+    make_docker_surface_target,
+    make_template_surface_target,
+)
 
 
 def _basic_auth(username: str = "larry", password: str = "secret") -> str:
@@ -163,6 +169,105 @@ async def test_surface_503s_when_target_is_not_configured(
     assert response.text == "Assistant surface target is not configured\n"
 
 
+async def test_surface_check_distinguishes_not_enabled(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    app = _build_app(sqlite_session_factory, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/surfaces/a-1/_check",
+            headers={"Authorization": _basic_auth()},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Assistant surface not enabled"
+
+
+async def test_surface_check_distinguishes_target_not_configured(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    await _enable_surface(sqlite_session_factory)
+    app = _build_app(sqlite_session_factory, tmp_path, target_resolver=None)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/surfaces/a-1/_check",
+            headers={"Authorization": _basic_auth()},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Assistant surface target is not configured"
+
+
+async def test_surface_check_distinguishes_target_unreachable(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _enable_surface(sqlite_session_factory)
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc_info: object) -> None:
+            return None
+
+        async def get(self, url: str) -> httpx.Response:
+            raise httpx.ConnectError("Name or service not known")
+
+    monkeypatch.setattr("email_agent.web.surfaces.httpx.AsyncClient", FakeAsyncClient)
+    app = _build_app(sqlite_session_factory, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/surfaces/a-1/_check",
+            headers={"Authorization": _basic_auth()},
+        )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Assistant surface target unreachable"
+
+
+async def test_surface_check_distinguishes_server_not_listening(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _enable_surface(sqlite_session_factory)
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc_info: object) -> None:
+            return None
+
+        async def get(self, url: str) -> httpx.Response:
+            raise httpx.ConnectError("Connection refused")
+
+    monkeypatch.setattr("email_agent.web.surfaces.httpx.AsyncClient", FakeAsyncClient)
+    app = _build_app(sqlite_session_factory, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/surfaces/a-1/_check",
+            headers={"Authorization": _basic_auth()},
+        )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Assistant surface server is not listening"
+
+
 async def test_surface_proxies_to_configured_port_and_path(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,
@@ -241,6 +346,126 @@ async def test_surface_proxies_to_configured_port_and_path(
     assert "authorization" not in forwarded
     assert "cookie" not in forwarded
     assert "x-viewer-email" not in forwarded
+
+
+async def test_surface_rewrites_root_relative_html_urls(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _enable_surface(sqlite_session_factory)
+    html = b"""
+        <form method="post" action="/add-workout"></form>
+        <a href="/workouts">Workouts</a>
+        <script src="/app.js"></script>
+        <link rel="stylesheet" href="/app.css">
+        <img src="/logo.png">
+        <a href="//example.com/protocol-relative">Protocol relative</a>
+        <a href="https://example.com/absolute">Absolute</a>
+        <a href="#section">Fragment</a>
+        <a href="mailto:test@example.com">Mail</a>
+        <img src="data:image/png;base64,abc">
+        <a href="/surfaces/a-1/already-prefixed">Already prefixed</a>
+    """
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc_info: object) -> None:
+            return None
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            *,
+            content: bytes,
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=gzip.compress(html),
+                headers={
+                    "content-type": "text/html",
+                    "content-length": "1",
+                    "content-encoding": "gzip",
+                },
+            )
+
+    monkeypatch.setattr("email_agent.web.surfaces.httpx.AsyncClient", FakeAsyncClient)
+    app = _build_app(sqlite_session_factory, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/surfaces/a-1/",
+            headers={"Authorization": _basic_auth()},
+        )
+
+    assert response.status_code == 200
+    body = response.text
+    assert 'action="/surfaces/a-1/add-workout"' in body
+    assert 'href="/surfaces/a-1/workouts"' in body
+    assert 'src="/surfaces/a-1/app.js"' in body
+    assert 'href="/surfaces/a-1/app.css"' in body
+    assert 'src="/surfaces/a-1/logo.png"' in body
+    assert 'href="//example.com/protocol-relative"' in body
+    assert 'href="https://example.com/absolute"' in body
+    assert 'href="#section"' in body
+    assert 'href="mailto:test@example.com"' in body
+    assert 'src="data:image/png;base64,abc"' in body
+    assert 'href="/surfaces/a-1/already-prefixed"' in body
+    assert 'href="/surfaces/a-1/surfaces/a-1/already-prefixed"' not in body
+    assert response.headers["content-length"] == str(len(response.content))
+    assert response.headers["content-length"] != "1"
+    assert "content-encoding" not in response.headers
+
+
+async def test_surface_does_not_rewrite_non_html_responses(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _enable_surface(sqlite_session_factory)
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc_info: object) -> None:
+            return None
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            *,
+            content: bytes,
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=b'{"next":"/api/capture"}',
+                headers={"content-type": "application/json"},
+            )
+
+    monkeypatch.setattr("email_agent.web.surfaces.httpx.AsyncClient", FakeAsyncClient)
+    app = _build_app(sqlite_session_factory, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/surfaces/a-1/api/state",
+            headers={"Authorization": _basic_auth()},
+        )
+
+    assert response.status_code == 200
+    assert response.content == b'{"next":"/api/capture"}'
 
 
 async def test_surface_api_accepts_valid_bearer_token_without_basic_auth(
@@ -428,6 +653,71 @@ def test_template_surface_target_uses_assistant_id_and_port() -> None:
         resolver(SurfaceProxySettings(assistant_id="a-1", port=8000))
         == "http://a-1.surface.local:8000"
     )
+
+
+class _FakeDockerContainers:
+    def __init__(self, container) -> None:
+        self._container = container
+        self.requested: list[str] = []
+
+    def get(self, name: str):
+        self.requested.append(name)
+        if self._container is None:
+            raise RuntimeError("missing")
+        return self._container
+
+
+class _FakeDockerContainer:
+    def __init__(self, networks: dict[str, Any]) -> None:
+        self.attrs = {"NetworkSettings": {"Networks": networks}}
+        self.reloads = 0
+
+    def reload(self) -> None:
+        self.reloads += 1
+
+
+class _FakeDockerClient:
+    def __init__(self, container) -> None:
+        self.containers = _FakeDockerContainers(container)
+
+
+def test_docker_surface_target_resolves_container_ip_and_port() -> None:
+    container = _FakeDockerContainer(
+        {"email-agent": {"IPAddress": "172.20.0.12"}, "other": {"IPAddress": "172.21.0.2"}}
+    )
+    client = _FakeDockerClient(container)
+    resolver = make_docker_surface_target(cast(Any, client), network="email-agent")
+
+    target = resolver(SurfaceProxySettings(assistant_id="a-1", port=8000))
+
+    assert client.containers.requested == ["email-agent-sandbox-a-1"]
+    assert container.reloads == 1
+    assert target == "http://172.20.0.12:8000"
+
+
+def test_docker_surface_target_prefers_published_host_port() -> None:
+    container = _FakeDockerContainer(
+        {
+            "email-agent": {
+                "IPAddress": "172.20.0.12",
+            }
+        }
+    )
+    container.attrs["NetworkSettings"]["Ports"] = {
+        "8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49152"}]
+    }
+    resolver = make_docker_surface_target(cast(Any, _FakeDockerClient(container)))
+
+    target = resolver(SurfaceProxySettings(assistant_id="a-1", port=8000))
+
+    assert target == "http://127.0.0.1:49152"
+
+
+def test_docker_surface_target_raises_when_container_missing() -> None:
+    resolver = make_docker_surface_target(cast(Any, _FakeDockerClient(None)))
+
+    with pytest.raises(SurfaceTargetUnavailableError):
+        resolver(SurfaceProxySettings(assistant_id="a-1", port=8000))
 
 
 async def test_surface_action_run_creates_synthetic_inbound_and_queues_run(

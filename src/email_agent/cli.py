@@ -375,6 +375,58 @@ async def _seed_assistant(
     )
 
 
+@app.command("surface-enable")
+def surface_enable(
+    assistant_id: str = typer.Argument(..., help="Assistant id, e.g. a-3f5aad0e."),
+    port: int = typer.Option(
+        8000,
+        "--port",
+        min=1,
+        max=65535,
+        help="Workspace surface server port.",
+    ),
+) -> None:
+    """Enable proxying for an assistant surface without direct SQL."""
+    asyncio.run(_set_assistant_surface(assistant_id, enabled=True, port=port))
+
+
+@app.command("surface-disable")
+def surface_disable(
+    assistant_id: str = typer.Argument(..., help="Assistant id, e.g. a-3f5aad0e."),
+) -> None:
+    """Disable proxying for an assistant surface without direct SQL."""
+    asyncio.run(_set_assistant_surface(assistant_id, enabled=False, port=None))
+
+
+async def _set_assistant_surface(
+    assistant_id: str,
+    *,
+    enabled: bool,
+    port: int | None,
+) -> None:
+    from email_agent.config import Settings
+    from email_agent.db.session import make_engine, make_session_factory
+    from email_agent.web.surface_settings import set_assistant_surface
+
+    settings = Settings()  # ty: ignore[missing-argument]
+    engine = make_engine(settings)
+    session_factory = make_session_factory(engine)
+    row = await set_assistant_surface(
+        session_factory,
+        assistant_id=assistant_id,
+        enabled=enabled,
+        port=port,
+    )
+    if row is None:
+        typer.secho(f"assistant {assistant_id} not found", fg="red")
+        raise typer.Exit(1)
+    state = "enabled" if row.enabled else "disabled"
+    typer.secho(
+        f"surface {state}: assistant={row.assistant_id} port={row.port}",
+        fg="green",
+    )
+
+
 async def _get_or_create_owner(session, *, owner_name: str, owner_email: str | None):
     import uuid
 
@@ -474,6 +526,7 @@ async def _migrate_workspace_to_bashkit(assistant_id: str, *, force: bool) -> No
         memory_mb=settings.sandbox_memory_mb,
         cpu_cores=settings.sandbox_cpu_cores,
         bash_timeout_seconds=settings.sandbox_bash_timeout_seconds,
+        docker_network=settings.sandbox_docker_network,
     )
     archive = await docker_provider.export_workspace_archive(assistant_id)
     if not archive:
@@ -536,6 +589,7 @@ async def _migrate_workspace_to_docker(assistant_id: str) -> None:
         memory_mb=settings.sandbox_memory_mb,
         cpu_cores=settings.sandbox_cpu_cores,
         bash_timeout_seconds=settings.sandbox_bash_timeout_seconds,
+        docker_network=settings.sandbox_docker_network,
     )
     await docker_provider.import_workspace_archive(assistant_id, archive)
 

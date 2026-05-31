@@ -209,6 +209,7 @@ def make_runtime_from_settings(
                 memory_mb=settings.sandbox_memory_mb,
                 cpu_cores=settings.sandbox_cpu_cores,
                 bash_timeout_seconds=settings.sandbox_bash_timeout_seconds,
+                docker_network=settings.sandbox_docker_network,
             )
         elif settings.sandbox_provider == "bashkit":
             from email_agent.sandbox.bashkit_environment import (

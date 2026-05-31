@@ -4,8 +4,8 @@ from typer.testing import CliRunner
 
 from email_agent.agent.assistant_agent import AssistantAgent
 from email_agent.agent.tool_registry import SUPPORTED_ASSISTANT_TOOLS
-from email_agent.cli import _get_or_create_owner, _seed_assistant, app
-from email_agent.db.models import Assistant, AssistantScopeRow, Owner
+from email_agent.cli import _get_or_create_owner, _seed_assistant, _set_assistant_surface, app
+from email_agent.db.models import Assistant, AssistantScopeRow, AssistantSurfaceRow, Owner
 from email_agent.models.assistant import AssistantScope, AssistantStatus
 
 runner = CliRunner()
@@ -107,3 +107,48 @@ async def test_seed_assistant_grants_all_supported_tools(
 
     assert scope is not None
     assert set(scope.tool_allowlist) == set(SUPPORTED_ASSISTANT_TOOLS)
+
+
+async def test_set_assistant_surface_enables_and_disables_row(
+    monkeypatch,
+    sqlite_engine,
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+):
+    class StubSettings:
+        pass
+
+    monkeypatch.setattr("email_agent.config.Settings", StubSettings)
+    monkeypatch.setattr("email_agent.db.session.make_engine", lambda _settings: sqlite_engine)
+    monkeypatch.setattr(
+        "email_agent.db.session.make_session_factory",
+        lambda _engine: sqlite_session_factory,
+    )
+
+    await _seed_assistant(
+        inbound_address="surface@example.com",
+        end_user_email="user@example.com",
+        end_user_name=None,
+        owner_name="Owner",
+        owner_email="owner@example.com",
+        monthly_budget_usd=10,
+        model="test-model",
+        allowed_senders=["user@example.com"],
+        memory_namespace=None,
+    )
+
+    async with sqlite_session_factory() as session:
+        assistant_id = (
+            await session.execute(
+                select(Assistant.id).where(Assistant.inbound_address == "surface@example.com")
+            )
+        ).scalar_one()
+
+    await _set_assistant_surface(assistant_id, enabled=True, port=8123)
+    await _set_assistant_surface(assistant_id, enabled=False, port=None)
+
+    async with sqlite_session_factory() as session:
+        row = await session.get(AssistantSurfaceRow, assistant_id)
+
+    assert row is not None
+    assert row.enabled is False
+    assert row.port == 8123

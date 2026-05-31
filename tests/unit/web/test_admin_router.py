@@ -21,6 +21,7 @@ from email_agent.db.models import (
     AgentRun,
     Assistant,
     AssistantScopeRow,
+    AssistantSurfaceRow,
     Budget,
     EmailMessage,
     EmailThread,
@@ -258,6 +259,7 @@ async def test_run_detail_html_shows_full_trace(
 
     resp = admin_client.get("/admin/runs/r-detail")
     assert resp.status_code == 200
+
     body = resp.text
 
     # Inbound + outbound bodies present (Jinja2 escapes apostrophes etc,
@@ -274,6 +276,31 @@ async def test_run_detail_html_shows_full_trace(
     # Usage shown.
     assert "1500" in body
     assert "120" in body
+
+
+async def test_admin_can_enable_and_disable_assistant_surface(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    admin_client: TestClient,
+):
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    enable = admin_client.post(
+        "/admin/assistants/a-1/surface", json={"enabled": True, "port": 8123}
+    )
+    assert enable.status_code == 200
+    assert enable.json() == {"assistant_id": "a-1", "enabled": True, "port": 8123}
+
+    disable = admin_client.delete("/admin/assistants/a-1/surface")
+    assert disable.status_code == 200
+    assert disable.json() == {"assistant_id": "a-1", "enabled": False, "port": 8123}
+
+    async with sqlite_session_factory() as session:
+        row = await session.get(AssistantSurfaceRow, "a-1")
+
+    assert row is not None
+    assert row.enabled is False
+    assert row.port == 8123
 
 
 async def test_run_detail_json_returns_structured_payload(

@@ -407,6 +407,61 @@ async def test_execute_run_writes_assistant_platform_environment(
     assert "ASSISTANT_SURFACE_BASE_URL='https://example.com/surfaces/a-1'" in env_file
 
 
+async def test_execute_run_substitutes_safe_surface_placeholder_in_outbound_reply(
+    sqlite_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+):
+    async with sqlite_session_factory() as session:
+        await _seed_assistant(session)
+
+    email_provider = InMemoryEmailProvider()
+    workspace = AssistantWorkspace(InMemoryEnvironment())
+    agent = AssistantAgent()
+    runtime = _build_runtime(
+        sqlite_session_factory,
+        tmp_path=tmp_path,
+        email_provider=email_provider,
+        workspace_provider=StaticWorkspaceProvider(workspace),
+        memory=InMemoryMemoryAdapter(),
+        agent=agent,
+        assistant_tools_base_url="http://tools.internal",
+        assistant_surface_base_url_template="https://example.com/surfaces/{assistant_id}",
+    )
+
+    await runtime.accept_inbound(_inbound())
+    run_id = await _run_id_for(sqlite_session_factory)
+
+    async def reply_with_placeholders(*_):
+        return ModelResponse(
+            parts=[
+                TextPart(
+                    content=(
+                        "Dashboard: ${ASSISTANT_SURFACE_BASE_URL}/\n"
+                        "Tools: ${ASSISTANT_TOOLS_BASE_URL}"
+                    )
+                )
+            ]
+        )
+
+    with agent.override_model(_scope(), FunctionModel(reply_with_placeholders)):
+        outcome = await runtime.execute_run(run_id)
+
+    assert isinstance(outcome, Completed)
+    sent_body = email_provider.sent[0].body_text
+    assert "Dashboard: https://example.com/surfaces/a-1/" in sent_body
+    assert "${ASSISTANT_SURFACE_BASE_URL}" not in sent_body
+    assert "Tools: ${ASSISTANT_TOOLS_BASE_URL}" in sent_body
+    assert "http://tools.internal" not in sent_body
+
+    async with sqlite_session_factory() as session:
+        outbound = (
+            await session.execute(select(EmailMessage).where(EmailMessage.direction == "outbound"))
+        ).scalar_one()
+
+    assert "Dashboard: https://example.com/surfaces/a-1/" in outbound.body_text
+    assert "${ASSISTANT_SURFACE_BASE_URL}" not in outbound.body_text
+
+
 async def test_execute_run_quietly_exits_when_agent_returns_exact_sentinel(
     sqlite_session_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,

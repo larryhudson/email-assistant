@@ -678,10 +678,14 @@ class AssistantRuntime:
             ):
                 cc_emails = [scope.end_user_email]
 
+            reply_body = _substitute_outbound_platform_placeholders(
+                agent_result.body,
+                assistant_surface_base_url=self._assistant_surface_base_url(scope.assistant_id),
+            )
             envelope = self._envelope_builder.build(
                 inbound=inbound_email,
                 from_email=scope.inbound_address,
-                body_text=agent_result.body,
+                body_text=reply_body,
                 attachments=attachment_models,
                 message_id_factory=self._message_id_factory,
                 run_footer=RunFooterContext(
@@ -1138,6 +1142,14 @@ def _inbound_email_from_message(message: EmailMessage) -> NormalizedInboundEmail
         body_text=message.body_text,
         received_at=datetime.now(UTC),
     )
+
+
+def _substitute_outbound_platform_placeholders(
+    body_text: str,
+    *,
+    assistant_surface_base_url: str,
+) -> str:
+    return body_text.replace("${ASSISTANT_SURFACE_BASE_URL}", assistant_surface_base_url)
 
 
 def _zero_usage():

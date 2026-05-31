@@ -3,6 +3,7 @@ import contextlib
 import io
 import tarfile
 import time
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
@@ -175,6 +176,8 @@ class DockerWorkspaceProvider:
         memory_mb: int = 512,
         cpu_cores: float = 1.0,
         bash_timeout_seconds: int = 60,
+        docker_network: str | None = None,
+        published_surface_ports: Sequence[int] = (8000,),
     ) -> None:
         self._client = client
         self._image = image
@@ -183,6 +186,8 @@ class DockerWorkspaceProvider:
         self._memory_mb = memory_mb
         self._cpu_cores = cpu_cores
         self._bash_timeout_seconds = bash_timeout_seconds
+        self._docker_network = docker_network
+        self._published_surface_ports = tuple(published_surface_ports)
 
     async def get_workspace(self, assistant_id: str) -> AssistantWorkspace:
         container = await asyncio.to_thread(self._ensure_container_sync, assistant_id)
@@ -214,11 +219,24 @@ class DockerWorkspaceProvider:
 
         if container.status != "running":
             container.start()
+        self._ensure_network_alias(container, assistant_id)
         return container
 
     def _create_container(self, assistant_id: str, name: str) -> "Container":
         volume_name = self._workspace_volume_name(assistant_id)
         self._ensure_workspace_volume(assistant_id)
+
+        run_kwargs = {}
+        if self._docker_network is not None:
+            endpoint_config = self._client.api.create_endpoint_config(aliases=[name])
+            run_kwargs["network"] = self._docker_network
+            run_kwargs["networking_config"] = self._client.api.create_networking_config(
+                {self._docker_network: endpoint_config}
+            )
+        if self._published_surface_ports:
+            run_kwargs["ports"] = {
+                f"{port}/tcp": ("127.0.0.1", None) for port in self._published_surface_ports
+            }
 
         return self._client.containers.run(
             image=self._image,
@@ -237,6 +255,7 @@ class DockerWorkspaceProvider:
             dns_opt=[],
             use_config_proxy=False,
             init=True,
+            **run_kwargs,
         )
 
     def _recreate_container(self, assistant_id: str, container: "Container") -> "Container":
@@ -288,6 +307,25 @@ class DockerWorkspaceProvider:
         except Exception:
             return False
         return attrs.get("Image") != current_image.id
+
+    def _ensure_network_alias(self, container: "Container", assistant_id: str) -> None:
+        if self._docker_network is None:
+            return
+        import docker.errors
+
+        container.reload()
+        attrs = container.attrs or {}
+        networks = attrs.get("NetworkSettings", {}).get("Networks", {})
+        network_info = networks.get(self._docker_network)
+        alias = self._container_name(assistant_id)
+        if network_info is not None and alias in (network_info.get("Aliases") or []):
+            return
+
+        network = self._client.networks.get(self._docker_network)
+        if network_info is not None:
+            with contextlib.suppress(docker.errors.APIError):
+                network.disconnect(container)
+        network.connect(container, aliases=[alias])
 
     def _ensure_workspace_volume(self, assistant_id: str) -> None:
         import docker.errors

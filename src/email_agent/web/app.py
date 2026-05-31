@@ -80,7 +80,15 @@ def build_app_from_settings() -> FastAPI:
     )
     settings.attachments_root.mkdir(parents=True, exist_ok=True)
     surface_target_resolver = None
-    if settings.assistant_surface_target_url_template is not None:
+    if settings.assistant_surface_target_provider == "docker":
+        import docker as docker_sdk
+        from email_agent.web.surfaces import make_docker_surface_target
+
+        surface_target_resolver = make_docker_surface_target(
+            docker_sdk.from_env(),
+            network=settings.sandbox_docker_network,
+        )
+    elif settings.assistant_surface_target_url_template is not None:
         from email_agent.web.surfaces import make_template_surface_target
 
         surface_target_resolver = make_template_surface_target(

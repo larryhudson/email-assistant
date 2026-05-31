@@ -4,7 +4,9 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from html import escape
+from html.parser import HTMLParser
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -29,6 +31,10 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+RECALCULATED_RESPONSE_HEADERS = {
+    "content-encoding",
+    "content-length",
+}
 BLOCKED_REQUEST_HEADERS = {
     "authorization",
     "cookie",
@@ -50,6 +56,10 @@ class SurfaceProxySettings:
 SurfaceTargetResolver = Callable[[SurfaceProxySettings], str]
 
 
+class SurfaceTargetUnavailableError(RuntimeError):
+    """Raised when a configured surface target cannot be resolved."""
+
+
 def make_template_surface_target(template: str) -> SurfaceTargetResolver:
     """Build a target resolver from an explicit URL template.
 
@@ -60,6 +70,39 @@ def make_template_surface_target(template: str) -> SurfaceTargetResolver:
 
     def resolve(settings: SurfaceProxySettings) -> str:
         return template.format(assistant_id=settings.assistant_id, port=settings.port)
+
+    return resolve
+
+
+def make_docker_surface_target(
+    client: Any,
+    *,
+    network: str | None = None,
+    container_name_template: str = "email-agent-sandbox-{assistant_id}",
+) -> SurfaceTargetResolver:
+    """Build a target resolver by inspecting assistant workspace containers."""
+
+    def resolve(settings: SurfaceProxySettings) -> str:
+        container_name = container_name_template.format(assistant_id=settings.assistant_id)
+        try:
+            container = client.containers.get(container_name)
+            container.reload()
+        except Exception as exc:
+            raise SurfaceTargetUnavailableError(
+                "Assistant surface container is unreachable"
+            ) from exc
+
+        attrs = container.attrs or {}
+        published_url = _docker_surface_published_url(attrs, settings.port)
+        if published_url is not None:
+            return published_url
+
+        networks = attrs.get("NetworkSettings", {}).get("Networks", {})
+        network_info = _docker_surface_network_info(networks, network)
+        ip_address = network_info.get("IPAddress") if network_info is not None else None
+        if not ip_address:
+            raise SurfaceTargetUnavailableError("Assistant surface container has no reachable IP")
+        return f"http://{ip_address}:{settings.port}"
 
     return resolve
 
@@ -162,14 +205,30 @@ def make_surfaces_router(
                     headers=headers,
                 )
             status_code = upstream.status_code
+            response_content = _rewrite_html_response(
+                upstream.content,
+                upstream.headers,
+                assistant_id,
+            )
             return Response(
-                content=upstream.content,
+                content=response_content,
                 status_code=upstream.status_code,
                 headers=_response_headers(upstream.headers),
             )
         except httpx.TimeoutException:
             status_code = 504
             return Response("Assistant surface timed out\n", status_code=status_code)
+        except httpx.ConnectError as exc:
+            status_code = 502
+            if _is_connection_refused(exc):
+                return Response(
+                    "Assistant surface server is not listening\n",
+                    status_code=status_code,
+                )
+            return Response("Assistant surface target unreachable\n", status_code=status_code)
+        except SurfaceTargetUnavailableError:
+            status_code = 502
+            return Response("Assistant surface target unreachable\n", status_code=status_code)
         except httpx.HTTPError:
             log.exception("assistant surface proxy failed")
             status_code = 502
@@ -186,10 +245,55 @@ def make_surfaces_router(
                 duration_ms,
             )
 
+    async def check_surface(assistant_id: str) -> dict[str, str | int]:
+        settings = await _load_surface_settings(session_factory, assistant_id)
+        if settings is None:
+            raise HTTPException(status_code=404, detail="Assistant surface not enabled")
+        if target_resolver is None:
+            raise HTTPException(
+                status_code=503, detail="Assistant surface target is not configured"
+            )
+
+        try:
+            target_base = target_resolver(settings).rstrip("/")
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                upstream = await client.get(target_base)
+        except httpx.TimeoutException as exc:
+            raise HTTPException(status_code=504, detail="Assistant surface timed out") from exc
+        except httpx.ConnectError as exc:
+            if _is_connection_refused(exc):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Assistant surface server is not listening",
+                ) from exc
+            raise HTTPException(
+                status_code=502,
+                detail="Assistant surface target unreachable",
+            ) from exc
+        except SurfaceTargetUnavailableError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Assistant surface target unreachable",
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail="Assistant surface unavailable") from exc
+
+        return {
+            "assistant_id": assistant_id,
+            "status": "reachable",
+            "target": target_base,
+            "upstream_status": upstream.status_code,
+        }
+
     router.add_api_route(
         "/surfaces/{assistant_id}/_action/run",
         run_surface_action,
         methods=["POST"],
+    )
+    router.add_api_route(
+        "/surfaces/{assistant_id}/_check",
+        check_surface,
+        methods=["GET"],
     )
     router.add_api_route(
         "/surfaces/{assistant_id}",
@@ -290,6 +394,170 @@ def _is_api_surface_path(path: str) -> bool:
     return path == "api" or path.startswith("api/")
 
 
+def _is_connection_refused(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        if getattr(current, "errno", None) in {61, 111}:
+            return True
+        text = str(current).lower()
+        if "connection refused" in text or "connect call failed" in text:
+            return True
+        for nested in (*getattr(current, "args", ()), current.__cause__, current.__context__):
+            if isinstance(nested, BaseException):
+                stack.append(nested)
+    return False
+
+
+def _docker_surface_network_info(
+    networks: dict[str, Any],
+    network: str | None,
+) -> dict[str, Any] | None:
+    if network is not None:
+        info = networks.get(network)
+        return info if isinstance(info, dict) else None
+    for info in networks.values():
+        if isinstance(info, dict) and info.get("IPAddress"):
+            return info
+    return None
+
+
+def _docker_surface_published_url(attrs: dict[str, Any], port: int) -> str | None:
+    bindings = attrs.get("NetworkSettings", {}).get("Ports", {}).get(f"{port}/tcp")
+    if not bindings:
+        return None
+    binding = bindings[0]
+    if not isinstance(binding, dict):
+        return None
+    host_port = binding.get("HostPort")
+    if not host_port:
+        return None
+    host_ip = binding.get("HostIp") or "127.0.0.1"
+    if host_ip in {"0.0.0.0", "::"}:
+        host_ip = "127.0.0.1"
+    if ":" in host_ip and not host_ip.startswith("["):
+        host_ip = f"[{host_ip}]"
+    return f"http://{host_ip}:{host_port}"
+
+
+def _rewrite_html_response(
+    content: bytes,
+    headers,
+    assistant_id: str,
+) -> bytes:
+    content_type = headers.get("content-type", "")
+    if content_type.partition(";")[0].strip().lower() != "text/html":
+        return content
+    encoding = _html_charset(content_type)
+    try:
+        html = content.decode(encoding)
+    except UnicodeDecodeError:
+        return content
+    rewritten = _rewrite_html_root_relative_urls(html, assistant_id=assistant_id)
+    return rewritten.encode(encoding)
+
+
+def _html_charset(content_type: str) -> str:
+    for part in content_type.split(";")[1:]:
+        key, _, value = part.strip().partition("=")
+        if key.lower() == "charset" and value.strip():
+            return value.strip().strip('"')
+    return "utf-8"
+
+
+class _SurfaceHtmlRewriter(HTMLParser):
+    _REWRITE_ATTRS: ClassVar[dict[str, set[str]]] = {
+        "a": {"href"},
+        "form": {"action"},
+        "img": {"src"},
+        "link": {"href"},
+        "script": {"src"},
+    }
+
+    def __init__(self, *, assistant_id: str) -> None:
+        super().__init__(convert_charrefs=False)
+        self._prefix = f"/surfaces/{assistant_id}"
+        self._parts: list[str] = []
+
+    def rewritten(self) -> str:
+        return "".join(self._parts)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._append_starttag(tag, attrs, closed=False)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._append_starttag(tag, attrs, closed=True)
+
+    def handle_endtag(self, tag: str) -> None:
+        self._parts.append(f"</{tag}>")
+
+    def handle_data(self, data: str) -> None:
+        self._parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        self._parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        self._parts.append(f"&#{name};")
+
+    def handle_comment(self, data: str) -> None:
+        self._parts.append(f"<!--{data}-->")
+
+    def handle_decl(self, decl: str) -> None:
+        self._parts.append(f"<!{decl}>")
+
+    def handle_pi(self, data: str) -> None:
+        self._parts.append(f"<?{data}>")
+
+    def unknown_decl(self, data: str) -> None:
+        self._parts.append(f"<![{data}]>")
+
+    def _append_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+        *,
+        closed: bool,
+    ) -> None:
+        rewritten_attrs = [(name, self._rewrite_attr(tag, name, value)) for name, value in attrs]
+        rendered_attrs = "".join(_render_html_attr(name, value) for name, value in rewritten_attrs)
+        closing = " /" if closed else ""
+        self._parts.append(f"<{tag}{rendered_attrs}{closing}>")
+
+    def _rewrite_attr(self, tag: str, name: str, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if name.lower() not in self._REWRITE_ATTRS.get(tag.lower(), set()):
+            return value
+        if not _is_rewritable_root_relative_url(value):
+            return value
+        if value == self._prefix or value.startswith(f"{self._prefix}/"):
+            return value
+        return f"{self._prefix}{value}"
+
+
+def _rewrite_html_root_relative_urls(html: str, *, assistant_id: str) -> str:
+    parser = _SurfaceHtmlRewriter(assistant_id=assistant_id)
+    parser.feed(html)
+    parser.close()
+    return parser.rewritten()
+
+
+def _render_html_attr(name: str, value: str | None) -> str:
+    if value is None:
+        return f" {name}"
+    return f' {name}="{escape(value, quote=True)}"'
+
+
+def _is_rewritable_root_relative_url(value: str) -> bool:
+    return value.startswith("/") and not value.startswith("//")
+
+
 async def _load_surface_settings(
     session_factory: async_sessionmaker[AsyncSession],
     assistant_id: str,
@@ -328,12 +596,17 @@ def _forward_headers(
 
 def _response_headers(headers) -> dict[str, str]:
     return {
-        name: value for name, value in headers.items() if name.lower() not in HOP_BY_HOP_HEADERS
+        name: value
+        for name, value in headers.items()
+        if name.lower() not in HOP_BY_HOP_HEADERS
+        and name.lower() not in RECALCULATED_RESPONSE_HEADERS
     }
 
 
 __all__ = [
     "SurfaceProxySettings",
+    "SurfaceTargetUnavailableError",
+    "make_docker_surface_target",
     "make_surfaces_router",
     "make_template_surface_target",
 ]

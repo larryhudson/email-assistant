@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from email_agent.db.models import (
@@ -30,6 +30,7 @@ from email_agent.db.models import (
     RunStep,
     UsageLedger,
 )
+from email_agent.web.surface_settings import set_assistant_surface
 from email_agent.web.surface_tokens import (
     create_surface_token,
     revoke_surface_tokens_for_assistant,
@@ -119,6 +120,11 @@ class _RunDetailPayload(BaseModel):
     usage_total_cost: Decimal
 
 
+class _SurfaceSettingsPayload(BaseModel):
+    enabled: bool = True
+    port: int = Field(default=8000, ge=1, le=65535)
+
+
 def make_admin_router(session_factory: async_sessionmaker[AsyncSession]) -> APIRouter:
     router = APIRouter()
     # Static files are mounted on the parent app, not the router —
@@ -200,6 +206,41 @@ def make_admin_router(session_factory: async_sessionmaker[AsyncSession]) -> APIR
             assistant_id=assistant_id,
         )
         return {"assistant_id": assistant_id, "revoked": revoked}
+
+    @router.post("/assistants/{assistant_id}/surface")
+    async def set_assistant_surface_settings(
+        assistant_id: str,
+        payload: _SurfaceSettingsPayload,
+    ) -> dict[str, str | bool | int]:
+        row = await set_assistant_surface(
+            session_factory,
+            assistant_id=assistant_id,
+            enabled=payload.enabled,
+            port=payload.port,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"assistant {assistant_id} not found")
+        return {
+            "assistant_id": row.assistant_id,
+            "enabled": row.enabled,
+            "port": row.port,
+        }
+
+    @router.delete("/assistants/{assistant_id}/surface")
+    async def disable_assistant_surface(assistant_id: str) -> dict[str, str | bool | int]:
+        row = await set_assistant_surface(
+            session_factory,
+            assistant_id=assistant_id,
+            enabled=False,
+            port=None,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"assistant {assistant_id} not found")
+        return {
+            "assistant_id": row.assistant_id,
+            "enabled": row.enabled,
+            "port": row.port,
+        }
 
     return router
 

@@ -825,6 +825,16 @@ Browser pages are protected by platform-owned owner auth. API routes under
 Apple Shortcuts. Treat route code as assistant-owned application logic, not as
 the security boundary.
 
+The public route model is path-based: `/surfaces/{assistant_id}/...`. For
+simple HTML pages, the platform rewrites common root-relative HTML attributes
+before the browser sees them, so values like `action="/add-workout"` or
+`href="/app.css"` continue to work when proxied. This applies to ordinary HTML
+attributes such as form actions, links, scripts, stylesheets, and images.
+
+Do not rely on the platform to rewrite JavaScript. If a script calls
+`fetch("/api/...")`, use a relative URL like `fetch("api/...")` from the
+surface page, or build the URL from `ASSISTANT_SURFACE_BASE_URL`.
+
 If the surface needs to trigger a privileged assistant/platform action, prefer
 the Assistant Tools API exposed through `ASSISTANT_TOOLS_BASE_URL` and its
 OpenAPI document. Keep direct state changes small and obvious.
