@@ -1,207 +1,84 @@
 # email-assistant
 
-A Python backend that runs one or more email-based AI assistants on a single
-stack. Each assistant has its own inbound email address, isolated durable
-memory, isolated Docker sandbox workspace, and per-assistant monthly budget.
-End users only ever see email — there's no UI for them. The operator uses a
-local admin web UI to inspect runs, threads, memory, and cost.
+An AI assistant you talk to by email, with its own persistent workspace for
+files, scripts and tools.
 
-This is a personal project, not a product. The first deployment runs one
-assistant for one end user. Adding more assistants is a config change, not
-another deployment.
+Email is a familiar interface, and much of the context an assistant needs
+already arrives in your inbox.
 
-> Full design lives in [`docs/superpowers/specs/2026-05-10-email-assistant-design.md`](docs/superpowers/specs/2026-05-10-email-assistant-design.md).
+Built with an LLM coding agent. This is a personal experiment, not a
+production-ready service.
 
 ## How it works
 
-Inbound mail hits Mailgun, which calls a webhook on this service. A run is
-queued in Postgres and a background worker drives the agent loop:
+Mailgun forwards incoming email to a FastAPI webhook. The API checks the
+signature and sender, saves the message in Postgres and queues an agent run
+using Procrastinate.
 
-```
-Mailgun → /webhooks/mailgun (FastAPI)
-        → verify signature, parse, route to assistant by inbound address
-        → resolve thread (Message-ID / In-Reply-To / References)
-        → persist inbound, queue run_agent(run_id)   ← returns 200 fast
-        → ─────────── worker ───────────
-        → BudgetGovernor: allow / send budget-limit template
-        → project thread to host dir, mirror into per-assistant Docker sandbox
-        → MemoryPort.recall(assistant_id, thread_id, query)  (Cognee)
-        → PydanticAI agent run with tools: read/write/edit/bash/memory_search/attach_file
-        → ReplyEnvelopeBuilder builds threading headers (Re:, In-Reply-To, References)
-        → EmailProvider.send_reply (Mailgun)
-        → RunRecorder writes run_steps + usage, queues curate_memory
-```
+A worker checks the assistant's budget, prepares its Docker workspace and runs
+a PydanticAI agent with access to files and shell commands. The final response
+is sent back as an email. Runs execute one at a time per assistant; workspace
+files persist between runs.
 
-Routing happens before the DB write so spam and misrouted mail are dropped
-without queuing a job. Inbound persistence is idempotent on `(assistant_id,
-provider_message_id)` so Mailgun retries don't duplicate runs.
+There's also an admin UI for inspecting runs and usage, scheduled tasks,
+optional Cognee memory, and integrations including Google Calendar and GitHub.
 
-The agent run itself is too slow for Mailgun's webhook timeout — it lives in
-a Procrastinate (Postgres-backed) job. `curate_memory` runs after each
-successful run to extract durable memories from the thread and persist them
-back into Cognee.
+For the main flow, start with
+[`assistant_runtime.py`](src/email_agent/runtime/assistant_runtime.py).
+[`composition.py`](src/email_agent/composition.py) wires the service adapters;
+[`sandbox/`](src/email_agent/sandbox/) handles workspace execution.
 
-### Architecture
+## Run locally
 
-Ports & adapters (hexagonal), grouped by capability. Each external boundary
-gets a `Protocol` in `port.py` plus adapter modules next to it:
-
-- `mail/` — `EmailProvider` (`mailgun.py`, `inmemory.py`)
-- `memory/` — `MemoryPort` (`cognee.py`, `inmemory.py`)
-- `sandbox/` — workspace execution abstractions: `SandboxEnvironment`,
-  `AssistantWorkspace`, `WorkspaceProvider`, plus Docker/in-memory adapters
-- `models/` — frozen pydantic data models shared across boundaries
-- `db/` — SQLAlchemy 2.0 async ORM + Alembic migrations
-- `domain/` — pure orchestration (router, thread resolver, budget governor, recorder)
-- `runtime/` — `AssistantRuntime` wires it all together
-- `web/` — FastAPI app: Mailgun webhook + admin UI (Jinja2 server-rendered)
-- `jobs/` — Procrastinate task definitions (`run_agent`, `curate_memory`)
-
-The core never imports a concrete adapter — composition wires adapters in at
-the edge so tests can swap real Mailgun / Cognee / Docker for in-memory
-fakes.
-
-### Stack
-
-| Concern | Choice |
-| --- | --- |
-| Language / runtime | Python 3.13 |
-| Package manager | `uv` |
-| Web framework | FastAPI + Jinja2 (no HTMX yet) |
-| Database | Postgres (Docker) + SQLAlchemy 2.0 async + Alembic |
-| Background jobs | Procrastinate |
-| Agent framework | PydanticAI |
-| Default model | Fireworks-hosted minimax-m2p7 (OpenAI-compatible) |
-| Memory | Cognee |
-| Email provider | Mailgun |
-| Sandbox | Per-assistant long-lived Docker container |
-| Lint / format | Ruff |
-| Type checker | `ty` (Astral) — *not* mypy |
-| Tests | pytest + pytest-asyncio (auto mode) |
-
-## Getting started
-
-### Prerequisites
-
-- Python 3.13
-- [uv](https://docs.astral.sh/uv/)
-- Docker (for Postgres + the agent sandbox)
-- [hivemind](https://github.com/DarthSim/hivemind) (`brew install hivemind`) — runs the dev process stack
-- [Tailscale](https://tailscale.com/download) with Funnel enabled — public URL for Mailgun → local webhook
-- A Mailgun account with an inbound route, plus API keys for Fireworks and OpenAI (for embeddings)
-
-### Setup
+Requires Python 3.13, [uv](https://docs.astral.sh/uv/), Docker and
+[Hivemind](https://github.com/DarthSim/hivemind).
 
 ```bash
-uv sync                           # install deps + dev deps
-cp .env.example .env              # then fill in real keys
-```
-
-Set `ADMIN_BASIC_AUTH_USERNAME` and `ADMIN_BASIC_AUTH_PASSWORD` in `.env`.
-The public `/admin` UI requires these credentials; the Mailgun webhook does
-not.
-
-### Run the dev stack
-
-```bash
+uv sync --locked
+cp .env.example .env
+# Fill in credentials and change the admin password in .env.
+make sandbox-build
 make dev
 ```
 
-That brings up Postgres (via `docker-compose`), runs migrations, then
-launches hivemind on `Procfile.dev` which runs two processes together:
+This starts Postgres, applies migrations, and runs the API and worker.
+The web server defaults to `http://127.0.0.1:18788`.
 
-- **web** — FastAPI app on `http://127.0.0.1:18788`. Admin UI at `/admin/`,
-  Mailgun webhook at `/webhooks/mailgun`.
-- **worker** — Procrastinate worker that picks up `run_agent` and
-  `curate_memory` jobs.
+Live email needs a Mailgun route pointing to a public HTTPS URL for
+`/webhooks/mailgun`. Model calls use Fireworks by default; optional memory
+needs its own model/embedding credentials. See `.env.example` and
+[`config.py`](src/email_agent/config.py).
 
-Tailscale Funnel is configured once on the machine. The Mailgun inbound route
-action should point at:
-
-```text
-https://<machine>.<tailnet>.ts.net:<funnel-port>/webhooks/mailgun
-```
-
-Both processes' output is also tee'd to `dev.log`.
-
-To exercise the loop without sending real Mailgun replies, prefix the
-worker line in `Procfile.dev` with `EMAIL_AGENT_WORKER_DRY_RUN=true` — it
-swaps the Mailgun adapter for an in-process stub.
-
-### Other make targets
+Create an assistant before sending mail. You can also inject a local `.eml` file:
 
 ```bash
-make db-up      # start Postgres only
-make db-down    # stop Postgres
-make migrate    # alembic upgrade head
-make sandbox-build  # rebuild the agent sandbox image
-make test       # pytest tests/unit
+uv run email-agent seed-assistant --help
+uv run email-agent inject-email --help
 ```
 
-### CLI
+## Checks
 
-`uv run email-agent --help` lists the operator commands:
+The unit tests use fake services and need no API keys, Postgres or Docker:
 
-- `migrate` — run Alembic migrations
-- `web` — start the FastAPI app
-- `worker` — start a Procrastinate worker
-- `seed-assistant` — provision an assistant (owner, end user, scope, budget)
-- `seed-memory` — preload Cognee with seed memories for an assistant
-- `inject-email` — feed an `.eml` fixture through the webhook path (handy for local repro)
-
-## Project layout
-
-```
-src/email_agent/
-  agent/         PydanticAI agent + tool wrappers
-  config.py      Settings (pydantic-settings, reads .env)
-  db/            SQLAlchemy ORM + Alembic migrations
-  domain/        router, thread resolver, budget governor, recorder, projector
-  jobs/          Procrastinate app + run_agent / curate_memory tasks
-  mail/          EmailProvider port + Mailgun + in-memory adapters
-  memory/        MemoryPort + Cognee + in-memory adapters
-  models/        frozen pydantic wire models
-  runtime/       AssistantRuntime
-  sandbox/       SandboxEnvironment, AssistantWorkspace, workspace providers
-  web/           FastAPI app, Mailgun webhook, admin UI
-
-tests/
-  unit/          fast, isolated tests with in-memory adapters
-  integration/   slower tests against real Postgres + Docker
-
-docs/
-  superpowers/specs/   design docs
-  superpowers/plans/   implementation plans (sliced delivery)
+```bash
+uv run pytest tests/unit -q
+uv run ruff check
+uv run ruff format --check
+uv run ty check
 ```
 
-## Domain models vs DB models
+Some tests are marked `xfail` for known gaps, including older direct-tool
+expectations and an unimplemented admin workspace browser. Integration tests
+have separate service requirements.
 
-Two parallel hierarchies that diverge intentionally:
+## Limitations
 
-- `models/` — frozen pydantic models for transport (webhook payloads, agent
-  inputs/outputs).
-- `db/models.py` — SQLAlchemy ORM rows for durable Postgres state.
+- Agents can execute arbitrary commands and access the network. There is no
+  outbound domain allowlist or general protection against prompt injection.
+- Budgets are checked before a run, so a run can exceed the remaining allowance.
+- Saving state, queueing jobs and sending replies aren't one atomic operation.
+  Failures between these steps need better recovery and duplicate handling.
 
-Each domain module that crosses the seam owns its own mapping (e.g.
-`RunRecorder` writes message rows from the normalized form). No
-auto-sync, no `sqlmodel`, no codegen — explicit beats magic at this size.
-Round-trip tests at the seam catch drift.
-
-## Status
-
-Slice 1 (core data + ports) is in. Future slices are tracked under
-`docs/superpowers/plans/`. This is pre-1.0; the data model and adapter
-surfaces will move.
-
-## Non-goals
-
-- Multi-admin / CRM-style user management.
-- A UI for end users.
-- Untrusted senders. Each assistant has an `allowed_senders` allowlist;
-  anything else is dropped.
-- Calendar / payment / high-risk write tools beyond what the sandbox
-  already permits via `bash`.
-
-## License
-
-No license file yet — treat as all-rights-reserved until one is added.
+The workspace makes bespoke capabilities possible, but their correctness still
+needs checking. For non-technical users, I'd lean toward a smaller set of tested
+capabilities with explicit permissions.

@@ -18,7 +18,9 @@ from procrastinate.testing import InMemoryConnector
 
 
 @pytest.mark.asyncio
-async def test_run_agent_task_records_unhandled_failure_before_reraising(monkeypatch) -> None:
+async def test_run_agent_task_records_unhandled_failure_before_reraising(
+    monkeypatch, worker_settings
+) -> None:
     calls: list[tuple[str, str]] = []
 
     class _StubRuntime:

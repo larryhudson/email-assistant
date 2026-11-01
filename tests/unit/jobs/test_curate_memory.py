@@ -141,7 +141,7 @@ async def test_curate_memory_writes_user_and_assistant_turns(
 
 
 @pytest.mark.asyncio
-async def test_curate_memory_task_noop_when_memory_disabled() -> None:
+async def test_curate_memory_task_noop_when_memory_disabled(worker_settings) -> None:
     """The procrastinate-registered `curate_memory` task body must early-return
     when worker deps were built with memory=None (memory layer disabled)."""
     from email_agent.jobs import app as jobs_app

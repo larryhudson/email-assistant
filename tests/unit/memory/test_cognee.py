@@ -65,6 +65,13 @@ def fake_cognee(monkeypatch: pytest.MonkeyPatch) -> _FakeCognee:
     import email_agent.memory.cognee as mod
 
     monkeypatch.setattr(mod, "cognee", fake)
+
+    async def fake_setup(self: CogneeMemoryAdapter) -> None:
+        # These tests substitute storage and users, so real Cognee setup must
+        # not initialize databases or download an embedding tokenizer.
+        self._setup_done = True
+
+    monkeypatch.setattr(CogneeMemoryAdapter, "_ensure_setup", fake_setup)
     return fake
 
 
